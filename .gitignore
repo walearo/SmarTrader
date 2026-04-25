@@ -1,0 +1,39 @@
+# ─── Secrets ──────────────────────────────────────────────────────────────────
+.env
+
+# ─── ML model (binary — large, regenerated via train_ml.py) ───────────────────
+*.pkl
+
+# ─── Runtime state (changes every run, not source code) ───────────────────────
+trade_history.json
+bot_log.json
+bot_control.json
+trade_journal.json
+
+# ─── SQLite database (runtime data) ──────────────────────────────────────────
+*.db
+*.db-shm
+*.db-wal
+
+# ─── Log files ────────────────────────────────────────────────────────────────
+*.log
+
+# ─── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# ─── Virtual environments ─────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ─── OS / editor noise ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+.claude/

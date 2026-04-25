@@ -1,0 +1,16 @@
+oandapyV20
+pandas
+ta
+requests
+xgboost
+scikit-learn
+numpy
+fastapi
+uvicorn
+python-multipart
+itsdangerous
+starlette
+anthropic
+lightgbm
+filelock
+python-dotenv
