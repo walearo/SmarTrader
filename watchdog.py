@@ -4,6 +4,9 @@ Process watchdog for main.py.
 Starts main.py as a subprocess and restarts it if it crashes.
 Uses exponential backoff (up to 5 min) to avoid restart storms.
 After MAX_RESTARTS consecutive rapid crashes it gives up and alerts.
+
+Bot stdout/stderr is written to bot_output.log (same directory).
+Watchdog's own log goes to watchdog.log.
 """
 
 import subprocess
@@ -16,15 +19,23 @@ from pathlib import Path
 import config
 import alerts
 
+_BASE_DIR     = Path(__file__).parent
+_LOG_FILE     = _BASE_DIR / "bot_output.log"
+_WATCHDOG_LOG = _BASE_DIR / "watchdog.log"
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [WATCHDOG] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        logging.FileHandler(_WATCHDOG_LOG, encoding="utf-8"),
+        logging.StreamHandler(sys.stdout),
+    ],
 )
 log = logging.getLogger(__name__)
 
 PYTHON        = sys.executable
-BOT_SCRIPT    = Path(__file__).parent / "main.py"
+BOT_SCRIPT    = _BASE_DIR / "main.py"
 MAX_RESTARTS  = 10          # give up after this many consecutive rapid crashes
 RAPID_CRASH_S = 60          # a crash within this many seconds counts as "rapid"
 BASE_DELAY_S  = 5           # initial restart delay
@@ -46,13 +57,15 @@ def run() -> None:
         start = time.monotonic()
         log.info(f"Launching {BOT_SCRIPT.name} ...")
 
+        log_fh = open(_LOG_FILE, "a", encoding="utf-8")
         proc = subprocess.Popen(
             [PYTHON, str(BOT_SCRIPT)],
-            stdout=sys.stdout,
-            stderr=sys.stderr,
+            stdout=log_fh,
+            stderr=log_fh,
         )
 
         exit_code = proc.wait()
+        log_fh.close()
         elapsed   = time.monotonic() - start
 
         if exit_code == 0:

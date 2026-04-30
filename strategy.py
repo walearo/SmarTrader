@@ -91,7 +91,7 @@ def get_signal(df: pd.DataFrame) -> str:
     return "flat"
 
 
-def get_sl_tp(df: pd.DataFrame, signal: str, entry_price: float = None) -> tuple[float, float]:
+def get_sl_tp(df: pd.DataFrame, signal: str, entry_price: float = None, pair: str = "") -> tuple[float, float]:
     """Calculate stop loss and take profit based on ATR.
 
     entry_price: actual fill price (ask for buy, bid for sell).
@@ -103,12 +103,13 @@ def get_sl_tp(df: pd.DataFrame, signal: str, entry_price: float = None) -> tuple
 
     sl_distance = atr * config.ATR_SL_MULTIPLIER
     tp_distance = atr * config.ATR_TP_MULTIPLIER
+    dp = config.INSTRUMENT_PRICE_DP.get(pair, config.INSTRUMENT_PRICE_DP_DEFAULT)
 
     if signal == "buy":
-        sl = round(price - sl_distance, 5)
-        tp = round(price + tp_distance, 5)
+        sl = round(price - sl_distance, dp)
+        tp = round(price + tp_distance, dp)
     else:  # sell
-        sl = round(price + sl_distance, 5)
-        tp = round(price - tp_distance, 5)
+        sl = round(price + sl_distance, dp)
+        tp = round(price - tp_distance, dp)
 
     return sl, tp

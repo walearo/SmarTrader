@@ -2,6 +2,7 @@
 
 import requests
 import config
+import bot_control
 
 
 def send(message: str) -> None:
@@ -23,6 +24,8 @@ def send(message: str) -> None:
 
 
 def trade_opened(pair: str, signal: str, price: float, sl: float, tp: float) -> None:
+    if not bot_control.is_alert_enabled("trade_open"):
+        return
     direction = "LONG" if signal == "buy" else "SHORT"
     send(
         f"*Trade Opened* \n"
@@ -35,6 +38,8 @@ def trade_opened(pair: str, signal: str, price: float, sl: float, tp: float) -> 
 
 
 def price_alert(pair: str, price: float, move_pips: float) -> None:
+    if not bot_control.is_alert_enabled("price_alert"):
+        return
     send(
         f"*Price Alert* \n"
         f"Pair: `{pair}`\n"
@@ -44,6 +49,8 @@ def price_alert(pair: str, price: float, move_pips: float) -> None:
 
 
 def trade_closed(pair: str, result: str, pl_pips: float) -> None:
+    if not bot_control.is_alert_enabled("trade_close"):
+        return
     emoji  = "✅" if result == "win" else "❌"
     sign   = "+" if pl_pips >= 0 else ""
     send(
@@ -55,8 +62,12 @@ def trade_closed(pair: str, result: str, pl_pips: float) -> None:
 
 
 def kill_switch_alert(reason: str) -> None:
+    if not bot_control.is_alert_enabled("kill_switch"):
+        return
     send(f"🚨 *Kill Switch Activated*\n{reason}\nBot paused for the rest of the day.")
 
 
 def error_alert(context: str, err: Exception) -> None:
+    if not bot_control.is_alert_enabled("error_alert"):
+        return
     send(f"*Bot Error* \n`{context}`: {err}")

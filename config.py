@@ -47,6 +47,15 @@ INSTRUMENT_PIP: dict[str, float] = {
 }
 INSTRUMENT_PIP_DEFAULT = 0.0001   # all standard forex pairs
 
+# Price decimal places per instrument (used when formatting SL/TP for the OANDA API).
+# Standard forex defaults to 5 dp; instruments with a different pip scale need explicit entries.
+INSTRUMENT_PRICE_DP: dict[str, int] = {
+    "USD_JPY":   3,    # e.g. 150.123
+    "XAU_USD":   2,    # e.g. 2350.45
+    "WTICO_USD": 3,    # e.g. 79.456
+}
+INSTRUMENT_PRICE_DP_DEFAULT = 5
+
 # Position size caps per instrument (native units: oz for Gold, barrels for Oil)
 INSTRUMENT_MIN_UNITS: dict[str, int] = {
     "XAU_USD":  1,

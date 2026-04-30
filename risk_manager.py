@@ -156,6 +156,10 @@ def _pip(instrument: str) -> float:
     return config.INSTRUMENT_PIP.get(instrument, config.INSTRUMENT_PIP_DEFAULT)
 
 
+def _price_dp(instrument: str) -> int:
+    return config.INSTRUMENT_PRICE_DP.get(instrument, config.INSTRUMENT_PRICE_DP_DEFAULT)
+
+
 def manage_open_trades(
     price_map: dict[str, float],
     open_trades: list,
@@ -210,19 +214,22 @@ def manage_open_trades(
                 log.error(f"Partial TP failed: {e}")
 
         # ── break-even ──
+        dp = _price_dp(instrument)
         if r_multiple >= config.BREAKEVEN_R:
             if direction == "buy" and current_sl < entry:
-                log.info(f"{instrument} [{trade['id']}]: moving SL to break-even {entry:.5f}")
+                be = round(entry, dp)
+                log.info(f"{instrument} [{trade['id']}]: moving SL to break-even {be}")
                 try:
-                    update_trade_sl(trade["id"], round(entry, 5))
+                    update_trade_sl(trade["id"], be, instrument)
                 except Exception as e:
                     log.error(f"Break-even update failed: {e}")
                 continue
 
             if direction == "sell" and current_sl > entry:
-                log.info(f"{instrument} [{trade['id']}]: moving SL to break-even {entry:.5f}")
+                be = round(entry, dp)
+                log.info(f"{instrument} [{trade['id']}]: moving SL to break-even {be}")
                 try:
-                    update_trade_sl(trade["id"], round(entry, 5))
+                    update_trade_sl(trade["id"], be, instrument)
                 except Exception as e:
                     log.error(f"Break-even update failed: {e}")
                 continue
@@ -238,18 +245,18 @@ def manage_open_trades(
                 trail_dist = initial_risk * config.TRAIL_ATR_MULT
 
             if direction == "buy":
-                new_sl = round(current - trail_dist, 5)
+                new_sl = round(current - trail_dist, dp)
                 if new_sl > current_sl:
                     log.info(f"{instrument} [{trade['id']}]: trailing SL → {new_sl}")
                     try:
-                        update_trade_sl(trade["id"], new_sl)
+                        update_trade_sl(trade["id"], new_sl, instrument)
                     except Exception as e:
                         log.error(f"Trailing stop update failed: {e}")
             else:
-                new_sl = round(current + trail_dist, 5)
+                new_sl = round(current + trail_dist, dp)
                 if new_sl < current_sl:
                     log.info(f"{instrument} [{trade['id']}]: trailing SL → {new_sl}")
                     try:
-                        update_trade_sl(trade["id"], new_sl)
+                        update_trade_sl(trade["id"], new_sl, instrument)
                     except Exception as e:
                         log.error(f"Trailing stop update failed: {e}")

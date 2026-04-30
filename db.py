@@ -157,6 +157,19 @@ def log_append(entry: dict) -> None:
         conn.close()
 
 
+def prune_bot_log(max_rows: int = 10_000) -> None:
+    """Delete oldest bot_log rows beyond max_rows. Called daily to cap table size."""
+    with _lock:
+        conn = _connect()
+        conn.execute(
+            "DELETE FROM bot_log WHERE id NOT IN "
+            "(SELECT id FROM bot_log ORDER BY id DESC LIMIT ?)",
+            (max_rows,)
+        )
+        conn.commit()
+        conn.close()
+
+
 def log_recent(count: int = 40) -> list[dict]:
     conn = _connect()
     rows = conn.execute(

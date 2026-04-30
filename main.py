@@ -17,6 +17,7 @@ Every tick:
 """
 
 import time
+import signal
 import logging
 from datetime import datetime, timezone
 
@@ -55,6 +56,13 @@ log = logging.getLogger(__name__)
 
 _bot_paused   = False
 _last_day_utc = None
+_shutdown     = False
+
+
+def _handle_signal(sig, frame):
+    global _shutdown
+    log.info("Shutdown signal received — finishing current cycle then exiting.")
+    _shutdown = True
 
 # ── trade closure tracking ────────────────────────────────────────────────────
 _open_trade_ids: set      = set()
@@ -71,6 +79,15 @@ def validate_config() -> None:
             f"Missing required credentials: {', '.join(missing)}. "
             "Set them in your .env file (see .env.example)."
         )
+
+    # ── OANDA environment check ─────────────────────────────────────────────────
+    if config.OANDA_ENVIRONMENT == "live":
+        log.warning(
+            "OANDA_ENVIRONMENT=live — bot is connected to a LIVE funded account. "
+            "All trades will use real money."
+        )
+    else:
+        log.info(f"OANDA_ENVIRONMENT={config.OANDA_ENVIRONMENT} (paper trading)")
 
     # ── security warnings (bot can run but should be fixed before going live) ───
     if not config.ANTHROPIC_API_KEY:
@@ -118,6 +135,8 @@ def _daily_reset() -> None:
     if today.weekday() == 0:
         reset_weekly_equity()
         log.info("Weekly equity reset (Monday).")
+
+    db.prune_bot_log()
 
     events = upcoming_events(hours=24)
     if events:
@@ -260,6 +279,9 @@ def _startup_recovery() -> None:
 def run_cycle() -> None:
     global _bot_paused
 
+    # ── 0a. apply any settings saved via dashboard ──────────────────────────
+    bot_control.apply_bot_settings()
+
     # ── 0. dashboard pause ──────────────────────────────────────────────────
     if bot_control.is_paused():
         ctrl = bot_control.status()
@@ -386,7 +408,7 @@ def _evaluate_pair(pair: str, open_trades: list = None) -> None:
     # ── 12. place order with dynamic sizing ──────────────────────────────────
     price  = get_price(pair)
     entry  = price["ask"] if signal == "buy" else price["bid"]
-    sl, tp = get_sl_tp(df, signal, entry_price=entry)
+    sl, tp = get_sl_tp(df, signal, entry_price=entry, pair=pair)
     # pass entry price so sizing is accurate for USD-base pairs (USD/JPY, USD/CHF, USD/CAD)
     units  = dynamic_units(pair, float(df["atr"].iloc[-1]), current_price=entry)
 
@@ -420,6 +442,9 @@ def _evaluate_pair(pair: str, open_trades: list = None) -> None:
 
 
 def main() -> None:
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT,  _handle_signal)
+
     validate_config()
     db.init()
     log.info("Smart FX Bot starting...")
@@ -430,7 +455,7 @@ def main() -> None:
         "Pairs: " + ", ".join(f"`{p}`" for p in config.PAIRS)
     )
 
-    while True:
+    while not _shutdown:
         try:
             _daily_reset()
             run_cycle()
@@ -439,6 +464,9 @@ def main() -> None:
             alerts.error_alert("main loop", e)
 
         time.sleep(config.CHECK_INTERVAL_SECONDS)
+
+    log.info("Bot shut down cleanly.")
+    alerts.send("*Bot shut down cleanly* (SIGTERM/SIGINT received).")
 
 
 if __name__ == "__main__":

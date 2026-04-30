@@ -3,7 +3,7 @@ FX Bot — Live Web Dashboard
 Features: Auth, Manual Controls, Charts, Mobile-Optimized
 
 Run:  python dashboard.py
-Open: http://localhost:8000
+Open: http://127.0.0.1:8000   (localhost only — use SSH tunnel for remote access)
 """
 
 import json
@@ -360,12 +360,99 @@ def api_close_all(request: Request):
     return {"results": _close_all_trades()}
 
 
+@app.get("/api/alerts")
+def api_alerts(request: Request):
+    if not authenticated(request):
+        return {"error": "unauthorized"}
+    return bot_control.get_alert_settings()
+
+
+@app.post("/api/alerts/toggle/{alert_type}")
+def api_toggle_alert(alert_type: str, request: Request):
+    if not authenticated(request):
+        return {"error": "unauthorized"}
+    if alert_type not in bot_control.ALERT_TYPES:
+        return {"error": "unknown alert type"}
+    current = bot_control.is_alert_enabled(alert_type)
+    bot_control.set_alert(alert_type, not current)
+    return {"alert_type": alert_type, "enabled": not current}
+
+
+@app.get("/api/settings")
+def api_get_settings(request: Request):
+    if not authenticated(request):
+        return {"unauthorized": True}
+    return bot_control.get_bot_settings()
+
+
+@app.post("/api/settings")
+async def api_save_settings(request: Request):
+    if not authenticated(request):
+        return {"error": "unauthorized"}
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "invalid JSON"}
+
+    errors = []
+    _int_ranges   = [("MAX_CONCURRENT_TRADES", 1, 10), ("UNITS", 100, 100_000),
+                     ("ALERT_PRICE_MOVE_PIPS", 1, 500), ("NEWS_BLACKOUT_MINUTES", 0, 180)]
+    _float_ranges = [("RISK_PCT_PER_TRADE", 0.1, 5.0),
+                     ("MAX_DAILY_LOSS_PCT", 0.5, 20.0), ("MAX_WEEKLY_LOSS_PCT", 1.0, 50.0)]
+
+    for key, lo, hi in _int_ranges:
+        if key in body:
+            v = body[key]
+            if not isinstance(v, int) or not (lo <= v <= hi):
+                errors.append(f"{key} must be an integer {lo}–{hi}")
+
+    for key, lo, hi in _float_ranges:
+        if key in body:
+            v = body[key]
+            if not isinstance(v, (int, float)) or not (lo <= v <= hi):
+                errors.append(f"{key} must be {lo}–{hi}")
+
+    if "PAIRS" in body:
+        v = body["PAIRS"]
+        valid = set(bot_control.ALL_PAIRS)
+        if not isinstance(v, list) or not v or not all(p in valid for p in v):
+            errors.append("PAIRS must be a non-empty list of valid pair names")
+
+    if "SESSIONS" in body:
+        v = body["SESSIONS"]
+        if not isinstance(v, list) or not v:
+            errors.append("SESSIONS must be a non-empty list")
+        else:
+            for s in v:
+                if not isinstance(s, list) or len(s) != 2:
+                    errors.append("Each session must be [start_hour, end_hour]"); break
+                start, end = s
+                if not isinstance(start, int) or not isinstance(end, int) or not (0 <= start < end <= 24):
+                    errors.append("Session hours: integers with 0 ≤ start < end ≤ 24"); break
+
+    if errors:
+        return {"error": "; ".join(errors)}
+
+    bot_control.save_bot_settings(body)
+    return {"status": "saved"}
+
+
+@app.post("/api/settings/reset")
+def api_reset_settings(request: Request):
+    if not authenticated(request):
+        return {"error": "unauthorized"}
+    bot_control.reset_bot_settings()
+    return {"status": "reset"}
+
+
 # ─── ROUTES — DATA ────────────────────────────────────────────────────────────
 
 @app.get("/api/data")
 def api_data(request: Request):
     if not authenticated(request):
         return {"unauthorized": True}
+
+    bot_control.apply_bot_settings()
 
     acc    = _account()
     closed = _closed_trades(50)
@@ -392,6 +479,7 @@ def api_data(request: Request):
         "bot_log":        _bot_log(40),
         "news":           _news(),
         "drawdown":       get_drawdown_status(),
+        "alert_settings": bot_control.get_alert_settings(),
     }
 
 
@@ -608,6 +696,43 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .themes-list{display:flex;flex-direction:column;gap:6px}
 .theme-item{background:#1e2227;border-left:3px solid var(--yellow);padding:8px 12px;border-radius:0 5px 5px 0;font-size:12px;color:var(--text);line-height:1.4}
 
+/* ── Settings Form ──────────────────────────────────────────────────────────── */
+.settings-sections{display:flex;flex-direction:column;gap:20px}
+.settings-section-title{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+.settings-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px 24px}
+.settings-row{display:flex;flex-direction:column;gap:5px}
+.settings-label{font-size:12px;color:var(--muted);font-weight:500}
+.settings-input{background:#0d1117;border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;padding:8px 12px;outline:none;width:100%;transition:.15s}
+.settings-input:focus{border-color:var(--blue)}
+.pairs-grid{display:flex;flex-wrap:wrap;gap:8px}
+.pair-checkbox{display:flex;align-items:center;gap:6px;padding:6px 11px;background:#1e2227;border:1px solid var(--border);border-radius:6px;cursor:pointer;user-select:none;font-size:12px;font-weight:600;color:var(--text);transition:.15s}
+.pair-checkbox:hover{border-color:#484f58}
+.pair-checkbox.pair-active{border-color:var(--green)}
+.pair-checkbox input{accent-color:var(--green)}
+.sessions-tbl{border-collapse:collapse;font-size:13px}
+.sessions-tbl th{font-size:11px;color:var(--muted);font-weight:500;text-align:left;padding:4px 10px 6px}
+.sessions-tbl td{padding:4px 10px}
+.session-input{background:#0d1117;border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:13px;padding:5px 8px;width:72px;outline:none;text-align:center}
+.session-input:focus{border-color:var(--blue)}
+.settings-note{font-size:11px;color:var(--muted);font-style:italic}
+
+/* ── Alert Toggles ──────────────────────────────────────────────────────────── */
+.alert-toggles{display:flex;flex-wrap:wrap;gap:10px;padding:4px 0}
+.alert-toggle-item{display:flex;align-items:center;gap:10px;padding:9px 14px;background:#1e2227;border:1px solid var(--border);border-radius:8px;cursor:pointer;user-select:none;transition:.15s;min-width:160px}
+.alert-toggle-item:hover{border-color:#484f58}
+.alert-toggle-item.a-enabled{border-color:var(--green)}
+.alert-toggle-item.a-disabled{border-color:#444;opacity:.75}
+.toggle-label{font-size:13px;font-weight:600;color:var(--text);flex:1}
+.toggle-state{font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;white-space:nowrap}
+.toggle-state.on{background:#1a3a1f;color:var(--green)}
+.toggle-state.off{background:#2a1a1a;color:var(--red)}
+.tgl-sw{position:relative;width:36px;height:20px;flex-shrink:0}
+.tgl-sw input{opacity:0;width:0;height:0;position:absolute}
+.tgl-slider{position:absolute;inset:0;background:#30363d;border-radius:10px;transition:.2s;pointer-events:none}
+.tgl-slider:before{content:'';position:absolute;width:14px;height:14px;left:3px;top:3px;background:var(--muted);border-radius:50%;transition:.2s}
+input:checked~.tgl-slider{background:var(--green)}
+input:checked~.tgl-slider:before{transform:translateX(16px);background:#fff}
+
 /* ── Scrollbar ──────────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar{width:5px;height:5px}
 ::-webkit-scrollbar-track{background:transparent}
@@ -659,6 +784,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
   <div class="tabs">
     <button class="tab-btn active" onclick="switchTab('main')">Dashboard</button>
     <button class="tab-btn" onclick="switchTab('journal')">Journal Analytics</button>
+    <button class="tab-btn" onclick="switchTab('settings')">Settings</button>
   </div>
 
   <div id="tab-main" class="tab-pane active">
@@ -792,6 +918,34 @@ tr:hover td{background:rgba(255,255,255,.02)}
       <div id="j-entries"><div class="empty">No entries yet</div></div>
     </div>
   </div><!-- end tab-journal -->
+
+  <!-- SETTINGS TAB -->
+  <div id="tab-settings" class="tab-pane">
+
+    <!-- Trading Parameters -->
+    <div class="row-full tcard" style="margin-bottom:16px">
+      <div class="tcard-hdr">
+        <div>
+          <h2>Trading Parameters</h2>
+          <div class="settings-note" style="margin-top:3px">Changes apply on the next bot cycle (~60s)</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="hdr-btn" onclick="resetSettings()">Reset Defaults</button>
+          <button class="hdr-btn primary" onclick="saveSettings()">Save Changes</button>
+        </div>
+      </div>
+      <div class="settings-sections" id="settings-form">
+        <div class="empty">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Telegram Alerts -->
+    <div class="row-full tcard">
+      <div class="tcard-hdr"><h2>Telegram Alerts</h2></div>
+      <div class="alert-toggles" id="alert-toggles"><div class="empty">Loading...</div></div>
+    </div>
+
+  </div><!-- end tab-settings -->
 
 </div>
 
@@ -1023,6 +1177,169 @@ function closeAll() {
   });
 }
 
+// ── Alert Toggles ─────────────────────────────────────────────────────────────
+const ALERT_LABELS = {
+  price_alert:  'Price Alerts',
+  trade_open:   'Trade Opened',
+  trade_close:  'Trade Closed',
+  kill_switch:  'Kill Switch',
+  error_alert:  'Error Alerts',
+};
+
+function renderAlertToggles(settings) {
+  if (!settings) return;
+  const el = $('alert-toggles');
+  el.innerHTML = Object.entries(ALERT_LABELS).map(([key, label]) => {
+    const on = settings[key] !== false;
+    return `<label class="alert-toggle-item ${on ? 'a-enabled' : 'a-disabled'}" for="atgl-${key}">
+      <div class="tgl-sw">
+        <input type="checkbox" id="atgl-${key}" ${on ? 'checked' : ''} onchange="toggleAlert('${key}', this.checked)">
+        <span class="tgl-slider"></span>
+      </div>
+      <span class="toggle-label">${label}</span>
+      <span class="toggle-state ${on ? 'on' : 'off'}" id="astate-${key}">${on ? 'ON' : 'OFF'}</span>
+    </label>`;
+  }).join('');
+}
+
+async function toggleAlert(alertType, checked) {
+  const d = await post(`/api/alerts/toggle/${alertType}`);
+  if (d.error) { toast('Error: ' + d.error, '#f85149'); return; }
+  const on = d.enabled;
+  const item = document.querySelector(`label[for="atgl-${alertType}"]`);
+  if (item) { item.classList.toggle('a-enabled', on); item.classList.toggle('a-disabled', !on); }
+  const stateEl = $('astate-' + alertType);
+  if (stateEl) { stateEl.textContent = on ? 'ON' : 'OFF'; stateEl.className = 'toggle-state ' + (on ? 'on' : 'off'); }
+  const chk = $('atgl-' + alertType);
+  if (chk) chk.checked = on;
+  toast((ALERT_LABELS[alertType] || alertType) + ' ' + (on ? 'enabled' : 'disabled'), on ? '#3fb950' : '#f85149');
+}
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+const ALL_PAIRS = ['EUR_USD','GBP_USD','USD_JPY','AUD_USD','USD_CHF','USD_CAD','NZD_USD','XAU_USD','WTICO_USD'];
+const SESSION_NAMES = ['London','New York','Asian','Custom'];
+let _settingsLoaded = false;
+
+async function loadSettings(force=false) {
+  if (_settingsLoaded && !force) return;
+  const d = await fetch('/api/settings').then(r => r.json());
+  if (d.unauthorized) { window.location.href = '/login'; return; }
+  _settingsLoaded = true;
+  renderSettingsForm(d);
+}
+
+function renderSettingsForm(d) {
+  const el = $('settings-form');
+  if (!el) return;
+
+  const activePairs = new Set(d.PAIRS || []);
+  const sessions    = d.SESSIONS || [[7,16],[13,22]];
+
+  const pairsHTML = ALL_PAIRS.map(p => `
+    <label class="pair-checkbox ${activePairs.has(p) ? 'pair-active' : ''}" id="pair-lbl-${p}" for="pair-${p}">
+      <input type="checkbox" id="pair-${p}" ${activePairs.has(p) ? 'checked' : ''}
+             onchange="$('pair-lbl-${p}').classList.toggle('pair-active',this.checked)">
+      ${p.replace('_','/')}
+    </label>`).join('');
+
+  const sessHTML = sessions.map((s, i) => `
+    <tr>
+      <td style="color:var(--muted);font-size:12px;padding-right:8px">${SESSION_NAMES[i] || 'Session '+(i+1)}</td>
+      <td><input type="number" class="session-input" id="sess-start-${i}" value="${s[0]}" min="0" max="23"></td>
+      <td style="color:var(--muted);padding:0 6px;font-size:12px">to</td>
+      <td><input type="number" class="session-input" id="sess-end-${i}" value="${s[1]}" min="1" max="24"></td>
+      <td style="color:var(--muted);font-size:11px;padding-left:8px">UTC</td>
+    </tr>`).join('');
+
+  el.innerHTML = `
+    <div class="settings-section">
+      <div class="settings-section-title">Position Management</div>
+      <div class="settings-grid">
+        <div class="settings-row"><label class="settings-label">Max Concurrent Trades</label>
+          <input type="number" id="s-MAX_CONCURRENT_TRADES" class="settings-input" value="${d.MAX_CONCURRENT_TRADES}" min="1" max="10" step="1"></div>
+        <div class="settings-row"><label class="settings-label">Base Trade Size (units)</label>
+          <input type="number" id="s-UNITS" class="settings-input" value="${d.UNITS}" min="100" max="100000" step="100"></div>
+        <div class="settings-row"><label class="settings-label">Risk % per Trade</label>
+          <input type="number" id="s-RISK_PCT_PER_TRADE" class="settings-input" value="${d.RISK_PCT_PER_TRADE}" min="0.1" max="5.0" step="0.1"></div>
+      </div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-section-title">Risk Limits</div>
+      <div class="settings-grid">
+        <div class="settings-row"><label class="settings-label">Max Daily Loss %</label>
+          <input type="number" id="s-MAX_DAILY_LOSS_PCT" class="settings-input" value="${d.MAX_DAILY_LOSS_PCT}" min="0.5" max="20" step="0.5"></div>
+        <div class="settings-row"><label class="settings-label">Max Weekly Loss %</label>
+          <input type="number" id="s-MAX_WEEKLY_LOSS_PCT" class="settings-input" value="${d.MAX_WEEKLY_LOSS_PCT}" min="1" max="50" step="0.5"></div>
+      </div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-section-title">Filters</div>
+      <div class="settings-grid">
+        <div class="settings-row"><label class="settings-label">News Blackout (minutes)</label>
+          <input type="number" id="s-NEWS_BLACKOUT_MINUTES" class="settings-input" value="${d.NEWS_BLACKOUT_MINUTES}" min="0" max="180" step="5"></div>
+        <div class="settings-row"><label class="settings-label">Price Alert Threshold (pips)</label>
+          <input type="number" id="s-ALERT_PRICE_MOVE_PIPS" class="settings-input" value="${d.ALERT_PRICE_MOVE_PIPS}" min="1" max="500" step="1"></div>
+      </div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-section-title">Trading Sessions (UTC hours)</div>
+      <table class="sessions-tbl">
+        <thead><tr><th>Session</th><th>Start</th><th></th><th>End</th><th></th></tr></thead>
+        <tbody id="s-sessions-body">${sessHTML}</tbody>
+      </table>
+    </div>
+    <div class="settings-section">
+      <div class="settings-section-title">Active Trading Pairs</div>
+      <div class="pairs-grid">${pairsHTML}</div>
+    </div>`;
+}
+
+async function saveSettings() {
+  const sessions = [];
+  let i = 0;
+  while ($('sess-start-' + i)) {
+    sessions.push([parseInt($('sess-start-'+i).value), parseInt($('sess-end-'+i).value)]);
+    i++;
+  }
+  const pairs = ALL_PAIRS.filter(p => { const el = $('pair-'+p); return el && el.checked; });
+  if (!pairs.length) { toast('Select at least one trading pair', '#f85149'); return; }
+
+  const body = {
+    MAX_CONCURRENT_TRADES: parseInt($('s-MAX_CONCURRENT_TRADES').value),
+    UNITS:                 parseInt($('s-UNITS').value),
+    RISK_PCT_PER_TRADE:    parseFloat($('s-RISK_PCT_PER_TRADE').value),
+    MAX_DAILY_LOSS_PCT:    parseFloat($('s-MAX_DAILY_LOSS_PCT').value),
+    MAX_WEEKLY_LOSS_PCT:   parseFloat($('s-MAX_WEEKLY_LOSS_PCT').value),
+    ALERT_PRICE_MOVE_PIPS: parseInt($('s-ALERT_PRICE_MOVE_PIPS').value),
+    NEWS_BLACKOUT_MINUTES: parseInt($('s-NEWS_BLACKOUT_MINUTES').value),
+    PAIRS: pairs, SESSIONS: sessions,
+  };
+
+  const d = await fetch('/api/settings', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  }).then(r => r.json());
+
+  if (d.error) { toast('Error: ' + d.error, '#f85149'); return; }
+  toast('Settings saved — takes effect next bot cycle', '#3fb950');
+}
+
+async function resetSettings() {
+  showConfirm({
+    title: 'Reset to Defaults',
+    message: 'Reset all trading parameters to the values defined in config.py / .env?',
+    confirmText: 'Reset',
+    onConfirm: async () => {
+      const d = await fetch('/api/settings/reset', { method: 'POST' }).then(r => r.json());
+      if (d.error) { toast('Error: ' + d.error, '#f85149'); return; }
+      _settingsLoaded = false;
+      await loadSettings(true);
+      toast('Reset to defaults', '#3fb950');
+    }
+  });
+}
+
 // ── Update functions ──────────────────────────────────────────────────────────
 function updateStats(d) {
   const a = d.account;
@@ -1068,6 +1385,9 @@ function updateStats(d) {
     btn.textContent   = '⏸ Pause Bot';
     btn.className     = 'hdr-btn primary';
   }
+
+  // alert toggles
+  if (d.alert_settings) renderAlertToggles(d.alert_settings);
 
   // drawdown bars (fix 2)
   if (d.drawdown) {
@@ -1226,11 +1546,13 @@ function switchTab(name) {
   document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   $('tab-' + name).classList.add('active');
+  const labelMap = {main: 'dashboard', journal: 'journal', settings: 'settings'};
   document.querySelectorAll('.tab-btn').forEach(b => {
-    if (b.textContent.toLowerCase().includes(name === 'main' ? 'dashboard' : 'journal'))
+    if (b.textContent.toLowerCase().includes(labelMap[name] || name))
       b.classList.add('active');
   });
-  if (name === 'journal') loadJournal();
+  if (name === 'journal')  loadJournal();
+  if (name === 'settings') loadSettings();
 }
 
 // ── Journal ───────────────────────────────────────────────────────────────────
@@ -1380,6 +1702,11 @@ def index(request: Request):
 
 # ─── ENTRY ────────────────────────────────────────────────────────────────────
 
+@app.get("/health")
+async def health():
+    return {"status": "ok", "ts": datetime.now(timezone.utc).isoformat()}
+
+
 if __name__ == "__main__":
     db.init()
-    uvicorn.run("dashboard:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("dashboard:app", host="127.0.0.1", port=8000, reload=False)

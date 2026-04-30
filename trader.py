@@ -20,6 +20,15 @@ def _client():
     )
 
 
+def _price_dp(pair: str) -> int:
+    return config.INSTRUMENT_PRICE_DP.get(pair, config.INSTRUMENT_PRICE_DP_DEFAULT)
+
+
+def _fmt_price(pair: str, price: float) -> str:
+    dp = _price_dp(pair)
+    return f"{round(price, dp):.{dp}f}"
+
+
 def _retry_request(client, ep, max_attempts: int = 3) -> None:
     """Execute an OANDA request, retrying only on transient network errors.
 
@@ -52,8 +61,8 @@ def place_order(pair: str, signal: str, sl: float, tp: float, units: int = None)
             "type":        "MARKET",
             "instrument":  pair,
             "units":       units,
-            "stopLossOnFill":   {"price": str(sl)},
-            "takeProfitOnFill": {"price": str(tp)},
+            "stopLossOnFill":   {"price": _fmt_price(pair, sl)},
+            "takeProfitOnFill": {"price": _fmt_price(pair, tp)},
             "timeInForce": "FOK",
             "positionFill": "DEFAULT",
         }
@@ -114,10 +123,10 @@ def get_account_equity() -> float:
     return float(r.response["account"]["NAV"])
 
 
-def update_trade_sl(trade_id: str, new_sl: float) -> None:
+def update_trade_sl(trade_id: str, new_sl: float, pair: str = "") -> None:
     """Update the stop-loss price on an open trade."""
     client = _client()
-    body = {"stopLoss": {"price": f"{new_sl:.5f}", "timeInForce": "GTC"}}
+    body = {"stopLoss": {"price": _fmt_price(pair, new_sl), "timeInForce": "GTC"}}
     r = trades_ep.TradeCRCDO(
         accountID=config.OANDA_ACCOUNT_ID,
         tradeID=trade_id,

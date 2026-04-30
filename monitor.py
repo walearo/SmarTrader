@@ -9,8 +9,7 @@ _last_prices: dict[str, float] = {}
 
 
 def _pip_value(pair: str) -> float:
-    """Return the pip size for a pair."""
-    return 0.0001 if "JPY" not in pair else 0.01
+    return config.INSTRUMENT_PIP.get(pair, config.INSTRUMENT_PIP_DEFAULT)
 
 
 def check_price_moves() -> None:
