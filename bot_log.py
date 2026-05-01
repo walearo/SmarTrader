@@ -41,3 +41,7 @@ def kill_switch(reason: str) -> None:
 
 def info(message: str) -> None:
     db.log_append({"time": _now(), "type": "info", "message": message})
+
+
+def error(context: str, err: Exception) -> None:
+    db.log_append({"time": _now(), "type": "error", "context": context, "message": str(err)})

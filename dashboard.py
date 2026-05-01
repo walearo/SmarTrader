@@ -641,6 +641,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .lb-trade_close{background:#1f1a2a;color:var(--purple)}
 .lb-filter{background:#2a2a1a;color:var(--yellow)}
 .lb-kill_switch{background:#3a1a1a;color:var(--red)}
+.lb-error{background:#3a1a1a;color:#ff6b6b}
 .lb-info{background:#1e2227;color:var(--muted)}
 .log-text{color:var(--text);flex:1;line-height:1.4}
 
@@ -1499,7 +1500,7 @@ function renderLog(log) {
   _lastLog = log;
   const el = $('bot-log');
   const TRADE_TYPES  = new Set(['signal', 'trade_open', 'trade_close']);
-  const ERROR_TYPES  = new Set(['kill_switch']);
+  const ERROR_TYPES  = new Set(['kill_switch', 'error']);
 
   const BLOCKED_TYPES = new Set(['filter']);
   let filtered = log;
@@ -1517,7 +1518,7 @@ function renderLog(log) {
   }
   const typeMap = {
     signal: 'SIGNAL', trade_open: 'TRADE OPEN', trade_close: 'TRADE CLOSE',
-    filter: 'FILTER', kill_switch: 'KILL SWITCH', info: 'INFO',
+    filter: 'FILTER', kill_switch: 'KILL SWITCH', info: 'INFO', error: 'ERROR',
   };
   const atTop = el.scrollTop < 40;
   el.innerHTML = filtered.map(e => {
@@ -1527,6 +1528,7 @@ function renderLog(log) {
     else if (e.type === 'trade_close') text = `${e.pair} closed &mdash; ${e.result} ${e.pnl_pips > 0 ? '+':''}${e.pnl_pips} pips`;
     else if (e.type === 'filter')      text = `${e.pair} &mdash; ${e.reason}`;
     else if (e.type === 'kill_switch') text = e.reason;
+    else if (e.type === 'error')      text = `${e.context}: ${e.message}`;
     else text = e.message || '';
     return `<div class="log-entry">
       <span class="log-time">${toLocal(e.time)}</span>

@@ -3,6 +3,7 @@
 import requests
 import config
 import bot_control
+import bot_log
 
 
 def send(message: str) -> None:
@@ -68,6 +69,7 @@ def kill_switch_alert(reason: str) -> None:
 
 
 def error_alert(context: str, err: Exception) -> None:
+    bot_log.error(context, err)
     if not bot_control.is_alert_enabled("error_alert"):
         return
     send(f"*Bot Error* \n`{context}`: {err}")
