@@ -17,9 +17,11 @@ from strategy import add_indicators
 _HTF_CACHE: dict[str, tuple[float, str]] = {}   # pair -> (timestamp, trend)
 _HTF_TTL   = 300                                 # 5-minute cache
 
-# Commodities trade ~23h/day — allow a wider session window than forex
-_COMMODITY_PAIRS   = {"XAU_USD", "WTICO_USD"}
-_COMMODITY_SESSIONS = [(7, 22)]   # covers London open through NY close
+# Commodities trade ~23h/day — allow a wider session window than forex.
+# WTICO_USD has a ~60-min daily close on OANDA around 22:00 UTC; stop at 21:00
+# to avoid placing orders into that close window (OANDA returns 500 during it).
+_COMMODITY_PAIRS    = {"XAU_USD", "WTICO_USD"}
+_COMMODITY_SESSIONS = [(7, 21)]   # covers London open through NY close, clears daily halt
 
 
 # ─── SESSION FILTER ───────────────────────────────────────────────────────────
