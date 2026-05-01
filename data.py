@@ -38,15 +38,32 @@ def get_candles(pair: str, count: int = 200, timeframe: str = None) -> pd.DataFr
     return df
 
 
-def get_price(pair: str) -> dict:
-    """Return current bid/ask for a pair."""
+def _parse_price(price: dict) -> dict:
+    bid = float(price["bids"][0]["price"])
+    ask = float(price["asks"][0]["price"])
+    return {"bid": bid, "ask": ask, "mid": (bid + ask) / 2}
+
+
+def get_prices(pairs: list) -> dict:
+    """Fetch bid/ask/mid for all pairs in a single API call.
+
+    Returns {pair: {"bid": float, "ask": float, "mid": float}}.
+    Missing or errored instruments are omitted from the result.
+    """
     client = _client()
-    params = {"instruments": pair}
+    params = {"instruments": ",".join(pairs)}
     r = pricing.PricingInfo(accountID=config.OANDA_ACCOUNT_ID, params=params)
     client.request(r)
-    price = r.response["prices"][0]
     return {
-        "bid": float(price["bids"][0]["price"]),
-        "ask": float(price["asks"][0]["price"]),
-        "mid": (float(price["bids"][0]["price"]) + float(price["asks"][0]["price"])) / 2,
+        p["instrument"]: _parse_price(p)
+        for p in r.response.get("prices", [])
+        if p.get("bids") and p.get("asks")
     }
+
+
+def get_price(pair: str) -> dict:
+    """Return current bid/ask/mid for a single pair."""
+    result = get_prices([pair])
+    if pair not in result:
+        raise ValueError(f"No pricing data returned for {pair}")
+    return result[pair]

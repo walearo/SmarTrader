@@ -25,7 +25,7 @@ import config
 import db
 import alerts
 import bot_log
-from data import get_candles, get_price
+from data import get_candles, get_price, get_prices
 from strategy import get_signal, get_sl_tp, add_indicators
 from trader import place_order, has_open_position, get_open_trades, get_closed_trade
 from monitor import check_price_moves
@@ -300,18 +300,23 @@ def run_cycle() -> None:
     else:
         _bot_paused = False
 
+    # ── 2 + 3. fetch all prices once — shared by monitor and trade management ──
+    try:
+        price_map = get_prices(config.PAIRS)
+    except Exception as e:
+        log.error(f"Batch price fetch failed: {e}")
+        alerts.error_alert("cycle/price_fetch", e)
+        price_map = {}
+
     # ── 2. price monitoring ─────────────────────────────────────────────────
-    check_price_moves()
+    check_price_moves(price_map)
 
     # ── 3. manage open trades (break-even + trailing) ───────────────────────
     open_trades = get_open_trades()   # fetch once — reused for closure detection and manage_open_trades
-    price_map = {}
-    for pair in config.PAIRS:
-        try:
-            price_map[pair] = get_price(pair)["mid"]
-        except Exception as e:
-            log.error(f"Price fetch error for {pair}: {e}")
-    manage_open_trades(price_map, open_trades=open_trades)   # pass pre-fetched list — no redundant API call
+    manage_open_trades(
+        {pair: data["mid"] for pair, data in price_map.items()},
+        open_trades=open_trades,
+    )
 
     # ── 4. detect closures → journal + record win/loss ──────────────────────
     _detect_closures(open_trades)
