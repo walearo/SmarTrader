@@ -47,18 +47,24 @@ def _parse_event_time(event: dict) -> datetime | None:
 
 def news_blackout_active(pair: str) -> tuple[bool, str]:
     """
-    Return (True, reason) if a high-impact news event is within the
-    blackout window for any currency in the pair.
-    Return (False, '') otherwise.
+    Return (True, reason) if trading should be blocked around a high-impact event.
+
+    Two-phase block:
+      Pre-event:  NEWS_BLACKOUT_MINUTES before the event fires.
+      Post-event: NEWS_POST_EVENT_HOURS after the event fires (market settling period).
+
+    The post-event window is intentionally longer — central bank decisions and
+    NFP prints often cause volatility that takes hours to resolve into a clean trend.
     """
-    currencies = set(pair.split("_"))   # e.g. {"EUR", "USD"}
+    currencies = set(pair.split("_"))
     watched    = currencies & set(config.NEWS_CURRENCIES)
     if not watched:
         return False, ""
 
-    events  = _fetch_calendar()
-    now     = datetime.now(timezone.utc)
-    window  = timedelta(minutes=config.NEWS_BLACKOUT_MINUTES)
+    events      = _fetch_calendar()
+    now         = datetime.now(timezone.utc)
+    pre_window  = timedelta(minutes=config.NEWS_BLACKOUT_MINUTES)
+    post_window = timedelta(hours=config.NEWS_POST_EVENT_HOURS)
 
     for event in events:
         if event.get("impact", "").lower() != "high":
@@ -70,9 +76,19 @@ def news_blackout_active(pair: str) -> tuple[bool, str]:
         if event_time is None:
             continue
 
-        if abs(now - event_time) <= window:
-            title = event.get("title", "Unknown event")
-            return True, f"{event['currency']} high-impact: '{title}' at {event_time.strftime('%H:%M UTC')}"
+        title = event.get("title", "Unknown event")
+        t_str = event_time.strftime("%H:%M UTC")
+
+        if event_time - pre_window <= now < event_time:
+            return True, f"{event['currency']} pre-event blackout: '{title}' at {t_str}"
+
+        if event_time <= now < event_time + post_window:
+            elapsed   = int((now - event_time).total_seconds() / 60)
+            remaining = int((event_time + post_window - now).total_seconds() / 60)
+            return True, (
+                f"{event['currency']} post-event cool-down: '{title}' was {elapsed}min ago "
+                f"({remaining}min remaining)"
+            )
 
     return False, ""
 

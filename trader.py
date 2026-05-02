@@ -156,10 +156,34 @@ def get_account_equity() -> float:
     return float(r.response["account"]["NAV"])
 
 
+def get_margin_available() -> tuple[float, float]:
+    """Return (marginAvailable, NAV) from OANDA account summary."""
+    client = _client()
+    r = accounts_ep.AccountSummary(accountID=config.OANDA_ACCOUNT_ID)
+    _retry_request(client, r)
+    acct = r.response["account"]
+    return float(acct["marginAvailable"]), float(acct["NAV"])
+
+
 def update_trade_sl(trade_id: str, new_sl: float, pair: str = "") -> None:
     """Update the stop-loss price on an open trade."""
     client = _client()
     body = {"stopLoss": {"price": _fmt_price(pair, new_sl), "timeInForce": "GTC"}}
+    r = trades_ep.TradeCRCDO(
+        accountID=config.OANDA_ACCOUNT_ID,
+        tradeID=trade_id,
+        data=body,
+    )
+    client.request(r)
+
+
+def update_trade_orders(trade_id: str, sl: float, tp: float, pair: str = "") -> None:
+    """Update both SL and TP on an open trade in a single OANDA request."""
+    client = _client()
+    body = {
+        "stopLoss":   {"price": _fmt_price(pair, sl),  "timeInForce": "GTC"},
+        "takeProfit": {"price": _fmt_price(pair, tp), "timeInForce": "GTC"},
+    }
     r = trades_ep.TradeCRCDO(
         accountID=config.OANDA_ACCOUNT_ID,
         tradeID=trade_id,

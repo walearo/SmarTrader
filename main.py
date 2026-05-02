@@ -27,7 +27,7 @@ import alerts
 import bot_log
 from data import get_candles, get_price, get_prices
 from strategy import get_signal, get_sl_tp, add_indicators
-from trader import place_order, has_open_position, get_open_trades, get_closed_trade
+from trader import place_order, has_open_position, get_open_trades, get_closed_trade, update_trade_orders, get_margin_available
 from monitor import check_price_moves
 from filters import all_filters_pass, in_session, correlation_ok
 from news import news_blackout_active, upcoming_events
@@ -170,6 +170,7 @@ def _detect_closures(current_open: list) -> None:
             entry      = float(trade.get("price", 0))
             close_px   = float(trade.get("averageClosePrice", 0))
             realized   = float(trade.get("realizedPL", 0))
+            financing  = float(trade.get("financing", 0))
             instrument = trade.get("instrument", "")
             direction  = "BUY" if units > 0 else "SELL"
             pip        = config.INSTRUMENT_PIP.get(instrument, config.INSTRUMENT_PIP_DEFAULT)
@@ -184,6 +185,7 @@ def _detect_closures(current_open: list) -> None:
                 "entry":         entry,
                 "exit_price":    close_px,
                 "pl_pips":       pl_pips,
+                "financing":     financing,
                 "rsi_at_entry":  meta.get("rsi"),
                 "atr_ratio":     meta.get("atr_ratio"),
                 "ml_confidence": meta.get("confidence"),
@@ -192,12 +194,16 @@ def _detect_closures(current_open: list) -> None:
                 "news_events":   meta.get("news_events"),
             })
 
-            result = "win" if realized > 0 else "loss"
+            # win/loss uses total economic return including overnight swap fees
+            result = "win" if (realized + financing) > 0 else "loss"
             record_trade_result(result)
             clear_partial_tp(trade_id)
-            bot_log.trade_close(instrument, result, pl_pips)
+            bot_log.trade_close(instrument, result, pl_pips, financing=financing)
             alerts.trade_closed(instrument, result, pl_pips)
-            log.info(f"{instrument}: trade {trade_id} closed — {result} ({pl_pips:+.1f} pips)")
+            if financing:
+                log.info(f"{instrument}: trade {trade_id} closed — {result} ({pl_pips:+.1f} pips, financing={financing:+.4f})")
+            else:
+                log.info(f"{instrument}: trade {trade_id} closed — {result} ({pl_pips:+.1f} pips)")
 
         except Exception as e:
             log.error(f"Closure processing error for {trade_id}: {e}")
@@ -235,6 +241,7 @@ def _startup_recovery() -> None:
                 entry      = float(trade.get("price", 0))
                 close_px   = float(trade.get("averageClosePrice", 0))
                 realized   = float(trade.get("realizedPL", 0))
+                financing  = float(trade.get("financing", 0))
                 instrument = trade.get("instrument", "")
                 direction  = "BUY" if units > 0 else "SELL"
                 pip        = config.INSTRUMENT_PIP.get(instrument, config.INSTRUMENT_PIP_DEFAULT)
@@ -244,10 +251,11 @@ def _startup_recovery() -> None:
                 journal.analyse_trade({
                     "instrument": instrument, "direction": direction,
                     "entry": entry, "exit_price": close_px, "pl_pips": pl_pips,
+                    "financing": financing,
                 })
-                result = "win" if realized > 0 else "loss"
+                result = "win" if (realized + financing) > 0 else "loss"
                 record_trade_result(result)
-                bot_log.trade_close(instrument, result, pl_pips)
+                bot_log.trade_close(instrument, result, pl_pips, financing=financing)
                 alerts.trade_closed(instrument, result, pl_pips)
                 log.info(
                     f"Startup recovery: {instrument} trade {trade_id} "
@@ -440,8 +448,45 @@ def _evaluate_pair(pair: str, open_trades: list = None) -> None:
     # pass entry price so sizing is accurate for USD-base pairs (USD/JPY, USD/CHF, USD/CAD)
     units  = dynamic_units(pair, float(df["atr"].iloc[-1]), current_price=entry)
 
+    # margin pre-check: skip if free margin is already below MARGIN_MIN_FREE_PCT of NAV
+    try:
+        margin_avail, nav = get_margin_available()
+        if nav > 0 and (margin_avail / nav * 100) < config.MARGIN_MIN_FREE_PCT:
+            pct = margin_avail / nav * 100
+            log.warning(
+                f"{pair}: skipping order — free margin {pct:.1f}% < "
+                f"{config.MARGIN_MIN_FREE_PCT}% of NAV"
+            )
+            bot_log.filter_blocked(
+                pair,
+                f"margin {pct:.1f}% < min {config.MARGIN_MIN_FREE_PCT}%"
+            )
+            return
+    except Exception as e:
+        log.warning(f"{pair}: margin check failed ({e}) — proceeding with order")
+
     response = place_order(pair, signal, sl, tp, units=units)
     log.info(f"{pair}: order placed ({units} units) → {response}")
+
+    # slippage correction: if actual fill price differs from quoted entry by > 0.5 pip,
+    # recalculate SL/TP from the real fill and update the trade's dependent orders
+    fill_tx = response.get("orderFillTransaction", {})
+    fill_price_str = fill_tx.get("price")
+    if fill_price_str:
+        fill_price = float(fill_price_str)
+        slippage   = abs(fill_price - entry)
+        if slippage > pip * 0.5:
+            sl, tp = get_sl_tp(df, signal, entry_price=fill_price, pair=pair)
+            slip_trade_id = fill_tx.get("tradeOpened", {}).get("tradeID")
+            if slip_trade_id:
+                try:
+                    update_trade_orders(slip_trade_id, sl, tp, pair)
+                    log.info(
+                        f"{pair}: SL/TP recalculated for {slippage/pip:.1f} pip slippage "
+                        f"(fill={fill_price}, quoted={entry})"
+                    )
+                except Exception as e:
+                    log.warning(f"{pair}: SL/TP slippage adjustment failed: {e}")
 
     # extract trade ID from OANDA response to track closure later
     trade_id = (

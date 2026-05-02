@@ -62,8 +62,8 @@ INSTRUMENT_MIN_UNITS: dict[str, int] = {
     "WTICO_USD": 1,
 }
 INSTRUMENT_MAX_UNITS: dict[str, int] = {
-    "XAU_USD":  50,    # 50 oz max (~$115K notional at $2300/oz)
-    "WTICO_USD": 300,  # 300 barrels max (~$24K notional at $80/bbl)
+    "XAU_USD":  10,    # 10 oz max (~$33K notional at $3300/oz — keeps margin usage < 15% NAV)
+    "WTICO_USD": 100,  # 100 barrels max (~$8K notional at $80/bbl)
 }
 
 # ─── STRATEGY PARAMETERS ──────────────────────────────────────────────────────
@@ -110,7 +110,8 @@ SESSIONS = [
 ATR_PERCENTILE_MIN = 25
 
 # ─── NEWS BLACKOUT ────────────────────────────────────────────────────────────
-NEWS_BLACKOUT_MINUTES = 30
+NEWS_BLACKOUT_MINUTES = 30    # block this many minutes BEFORE a high-impact event
+NEWS_POST_EVENT_HOURS = 3     # block this many hours AFTER a high-impact event (market settling)
 NEWS_CURRENCIES = ["USD", "EUR", "GBP", "NZD", "JPY", "CHF", "AUD", "CAD"]
 
 # ─── BACKTEST ─────────────────────────────────────────────────────────────────
@@ -137,6 +138,10 @@ MAX_TRADE_HOURS = 24      # close stalled trades after this many hours (0 = disa
 # ─── DAILY LIMITS ─────────────────────────────────────────────────────────────
 MAX_DAILY_TRADES       = 6   # max new trades opened per day (0 = unlimited)
 MAX_CONSECUTIVE_LOSSES = 4   # pause new entries after this many losses in a row (0 = disabled)
+
+# ─── MARGIN PROTECTION ────────────────────────────────────────────────────────
+# Skip new entries if free margin would fall below this % of account NAV.
+MARGIN_MIN_FREE_PCT: float = 20.0
 
 # ─── MONITORING ───────────────────────────────────────────────────────────────
 ALERT_PRICE_MOVE_PIPS  = 20

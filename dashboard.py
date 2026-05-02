@@ -397,6 +397,7 @@ async def api_save_settings(request: Request):
     errors = []
     _int_ranges   = [("MAX_CONCURRENT_TRADES", 1, 10), ("UNITS", 100, 100_000),
                      ("ALERT_PRICE_MOVE_PIPS", 1, 500), ("NEWS_BLACKOUT_MINUTES", 0, 180),
+                     ("NEWS_POST_EVENT_HOURS", 0, 24),
                      ("MAX_TRADE_HOURS", 0, 168), ("MAX_DAILY_TRADES", 0, 50),
                      ("MAX_CONSECUTIVE_LOSSES", 0, 20)]
     _float_ranges = [("RISK_PCT_PER_TRADE", 0.1, 5.0),
@@ -1369,6 +1370,8 @@ function renderSettingsForm(d) {
       <div class="settings-grid">
         <div class="settings-row"><label class="settings-label">News Blackout (minutes)</label>
           <input type="number" id="s-NEWS_BLACKOUT_MINUTES" class="settings-input" value="${d.NEWS_BLACKOUT_MINUTES}" min="0" max="180" step="5"></div>
+        <div class="settings-row"><label class="settings-label">Post-Event Cool-down (hours)</label>
+          <input type="number" id="s-NEWS_POST_EVENT_HOURS" class="settings-input" value="${d.NEWS_POST_EVENT_HOURS}" min="0" max="24" step="1"></div>
         <div class="settings-row"><label class="settings-label">Price Alert Threshold (pips)</label>
           <input type="number" id="s-ALERT_PRICE_MOVE_PIPS" class="settings-input" value="${d.ALERT_PRICE_MOVE_PIPS}" min="1" max="500" step="1"></div>
         <div class="settings-row"><label class="settings-label">Max Spread (pips, 0=off)</label>
@@ -1412,6 +1415,7 @@ async function saveSettings() {
     MAX_WEEKLY_LOSS_PCT:   parseFloat($('s-MAX_WEEKLY_LOSS_PCT').value),
     ALERT_PRICE_MOVE_PIPS:  parseInt($('s-ALERT_PRICE_MOVE_PIPS').value),
     NEWS_BLACKOUT_MINUTES:  parseInt($('s-NEWS_BLACKOUT_MINUTES').value),
+    NEWS_POST_EVENT_HOURS:  parseInt($('s-NEWS_POST_EVENT_HOURS').value),
     SPREAD_MAX_PIPS:        parseFloat($('s-SPREAD_MAX_PIPS').value),
     MAX_TRADE_HOURS:        parseInt($('s-MAX_TRADE_HOURS').value),
     MAX_DAILY_TRADES:       parseInt($('s-MAX_DAILY_TRADES').value),

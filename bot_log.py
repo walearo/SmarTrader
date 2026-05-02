@@ -24,11 +24,14 @@ def trade_open(pair: str, direction: str, entry: float, sl: float, tp: float, un
     })
 
 
-def trade_close(pair: str, result: str, pnl_pips: float) -> None:
-    db.log_append({
+def trade_close(pair: str, result: str, pnl_pips: float, financing: float = 0.0) -> None:
+    entry = {
         "time": _now(), "type": "trade_close",
         "pair": pair, "result": result, "pnl_pips": round(pnl_pips, 1),
-    })
+    }
+    if financing:
+        entry["financing"] = round(financing, 4)
+    db.log_append(entry)
 
 
 def filter_blocked(pair: str, reason: str) -> None:

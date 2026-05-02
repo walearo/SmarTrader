@@ -498,9 +498,12 @@ class TestSettingsValidation(unittest.TestCase):
         import bot_control
         errors = []
         _int_ranges   = [("MAX_CONCURRENT_TRADES", 1, 10), ("UNITS", 100, 100_000),
-                         ("ALERT_PRICE_MOVE_PIPS", 1, 500), ("NEWS_BLACKOUT_MINUTES", 0, 180)]
+                         ("ALERT_PRICE_MOVE_PIPS", 1, 500), ("NEWS_BLACKOUT_MINUTES", 0, 180),
+                         ("MAX_TRADE_HOURS", 0, 168), ("MAX_DAILY_TRADES", 0, 50),
+                         ("MAX_CONSECUTIVE_LOSSES", 0, 20)]
         _float_ranges = [("RISK_PCT_PER_TRADE", 0.1, 5.0),
-                         ("MAX_DAILY_LOSS_PCT", 0.5, 20.0), ("MAX_WEEKLY_LOSS_PCT", 1.0, 50.0)]
+                         ("MAX_DAILY_LOSS_PCT", 0.5, 20.0), ("MAX_WEEKLY_LOSS_PCT", 1.0, 50.0),
+                         ("SPREAD_MAX_PIPS", 0.5, 200.0)]
 
         for key, lo, hi in _int_ranges:
             if key in body:
@@ -716,6 +719,722 @@ class TestDrawdownLimitsFollowSettings(unittest.TestCase):
         self.cfg.MAX_DAILY_LOSS_PCT = self._orig_daily
         dd = get_drawdown_status()
         self.assertAlmostEqual(dd["daily_limit"], self._orig_daily)
+
+
+# ─── 10. NEW SETTINGS VALIDATION BOUNDARIES ──────────────────────────────────
+
+class TestNewSettingsValidation(unittest.TestCase):
+    """Boundary tests for the 4 new settings fields added in the last session."""
+
+    _validate = staticmethod(TestSettingsValidation._validate)   # reuse the updated method
+
+    # SPREAD_MAX_PIPS (float 0.5–200.0)
+    def test_spread_min_boundary_passes(self):
+        self.assertNotIn("SPREAD_MAX_PIPS", self._validate({"SPREAD_MAX_PIPS": 0.5}))
+
+    def test_spread_max_boundary_passes(self):
+        self.assertNotIn("SPREAD_MAX_PIPS", self._validate({"SPREAD_MAX_PIPS": 200.0}))
+
+    def test_spread_below_min_fails(self):
+        self.assertIn("SPREAD_MAX_PIPS", self._validate({"SPREAD_MAX_PIPS": 0.4}))
+
+    def test_spread_above_max_fails(self):
+        self.assertIn("SPREAD_MAX_PIPS", self._validate({"SPREAD_MAX_PIPS": 200.1}))
+
+    def test_spread_typical_value_passes(self):
+        self.assertNotIn("SPREAD_MAX_PIPS", self._validate({"SPREAD_MAX_PIPS": 3.0}))
+
+    # MAX_TRADE_HOURS (int 0–168)
+    def test_trade_hours_zero_passes(self):
+        self.assertNotIn("MAX_TRADE_HOURS", self._validate({"MAX_TRADE_HOURS": 0}))
+
+    def test_trade_hours_max_passes(self):
+        self.assertNotIn("MAX_TRADE_HOURS", self._validate({"MAX_TRADE_HOURS": 168}))
+
+    def test_trade_hours_too_high_fails(self):
+        self.assertIn("MAX_TRADE_HOURS", self._validate({"MAX_TRADE_HOURS": 169}))
+
+    def test_trade_hours_negative_fails(self):
+        self.assertIn("MAX_TRADE_HOURS", self._validate({"MAX_TRADE_HOURS": -1}))
+
+    def test_trade_hours_float_fails(self):
+        self.assertIn("MAX_TRADE_HOURS", self._validate({"MAX_TRADE_HOURS": 24.5}))
+
+    # MAX_DAILY_TRADES (int 0–50)
+    def test_daily_trades_zero_passes(self):
+        self.assertNotIn("MAX_DAILY_TRADES", self._validate({"MAX_DAILY_TRADES": 0}))
+
+    def test_daily_trades_max_passes(self):
+        self.assertNotIn("MAX_DAILY_TRADES", self._validate({"MAX_DAILY_TRADES": 50}))
+
+    def test_daily_trades_too_high_fails(self):
+        self.assertIn("MAX_DAILY_TRADES", self._validate({"MAX_DAILY_TRADES": 51}))
+
+    def test_daily_trades_negative_fails(self):
+        self.assertIn("MAX_DAILY_TRADES", self._validate({"MAX_DAILY_TRADES": -1}))
+
+    # MAX_CONSECUTIVE_LOSSES (int 0–20)
+    def test_consec_losses_zero_passes(self):
+        self.assertNotIn("MAX_CONSECUTIVE_LOSSES", self._validate({"MAX_CONSECUTIVE_LOSSES": 0}))
+
+    def test_consec_losses_max_passes(self):
+        self.assertNotIn("MAX_CONSECUTIVE_LOSSES", self._validate({"MAX_CONSECUTIVE_LOSSES": 20}))
+
+    def test_consec_losses_too_high_fails(self):
+        self.assertIn("MAX_CONSECUTIVE_LOSSES", self._validate({"MAX_CONSECUTIVE_LOSSES": 21}))
+
+    def test_consec_losses_negative_fails(self):
+        self.assertIn("MAX_CONSECUTIVE_LOSSES", self._validate({"MAX_CONSECUTIVE_LOSSES": -1}))
+
+
+# ─── 11. NEW SETTINGS DEFAULTS & APPLY ───────────────────────────────────────
+
+class TestNewSettingsDefaults(unittest.TestCase):
+    """Verify the 4 new settings keys are present in SETTINGS_KEYS and get_bot_settings()."""
+
+    def setUp(self):
+        import bot_control, config
+        self.bc  = bot_control
+        self.cfg = config
+        tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w")
+        tmp.write("{}")
+        tmp.close()
+        self._tmp      = tmp.name
+        self._orig_path = bot_control.SETTINGS_PATH
+        bot_control.SETTINGS_PATH = self._tmp
+        # snapshot originals
+        self._orig_spread  = config.SPREAD_MAX_PIPS
+        self._orig_hours   = config.MAX_TRADE_HOURS
+        self._orig_daily   = config.MAX_DAILY_TRADES
+        self._orig_consec  = config.MAX_CONSECUTIVE_LOSSES
+
+    def tearDown(self):
+        self.bc.SETTINGS_PATH   = self._orig_path
+        self.cfg.SPREAD_MAX_PIPS       = self._orig_spread
+        self.cfg.MAX_TRADE_HOURS       = self._orig_hours
+        self.cfg.MAX_DAILY_TRADES      = self._orig_daily
+        self.cfg.MAX_CONSECUTIVE_LOSSES = self._orig_consec
+        if os.path.exists(self._tmp):
+            os.unlink(self._tmp)
+
+    def test_new_keys_in_settings_keys(self):
+        new_keys = {"SPREAD_MAX_PIPS", "MAX_TRADE_HOURS", "MAX_DAILY_TRADES", "MAX_CONSECUTIVE_LOSSES"}
+        self.assertTrue(new_keys.issubset(set(self.bc.SETTINGS_KEYS)))
+
+    def test_spread_max_pips_default_matches_config(self):
+        self.assertAlmostEqual(self.bc.get_bot_settings()["SPREAD_MAX_PIPS"], self.cfg.SPREAD_MAX_PIPS)
+
+    def test_max_trade_hours_default_matches_config(self):
+        self.assertEqual(self.bc.get_bot_settings()["MAX_TRADE_HOURS"], self.cfg.MAX_TRADE_HOURS)
+
+    def test_max_daily_trades_default_matches_config(self):
+        self.assertEqual(self.bc.get_bot_settings()["MAX_DAILY_TRADES"], self.cfg.MAX_DAILY_TRADES)
+
+    def test_max_consecutive_losses_default_matches_config(self):
+        self.assertEqual(self.bc.get_bot_settings()["MAX_CONSECUTIVE_LOSSES"], self.cfg.MAX_CONSECUTIVE_LOSSES)
+
+    def test_new_settings_saved_and_read(self):
+        self.bc.save_bot_settings({"SPREAD_MAX_PIPS": 5.0, "MAX_TRADE_HOURS": 48,
+                                   "MAX_DAILY_TRADES": 10, "MAX_CONSECUTIVE_LOSSES": 3})
+        s = self.bc.get_bot_settings()
+        self.assertAlmostEqual(s["SPREAD_MAX_PIPS"], 5.0)
+        self.assertEqual(s["MAX_TRADE_HOURS"], 48)
+        self.assertEqual(s["MAX_DAILY_TRADES"], 10)
+        self.assertEqual(s["MAX_CONSECUTIVE_LOSSES"], 3)
+
+    def test_new_settings_applied_to_config(self):
+        self.bc.save_bot_settings({"SPREAD_MAX_PIPS": 7.0, "MAX_TRADE_HOURS": 12,
+                                   "MAX_DAILY_TRADES": 8,  "MAX_CONSECUTIVE_LOSSES": 5})
+        self.bc.apply_bot_settings()
+        self.assertAlmostEqual(self.cfg.SPREAD_MAX_PIPS, 7.0)
+        self.assertEqual(self.cfg.MAX_TRADE_HOURS, 12)
+        self.assertEqual(self.cfg.MAX_DAILY_TRADES, 8)
+        self.assertEqual(self.cfg.MAX_CONSECUTIVE_LOSSES, 5)
+
+
+# ─── 12. CONSECUTIVE LOSSES ───────────────────────────────────────────────────
+
+class TestConsecutiveLosses(unittest.TestCase):
+    """Unit tests for trade_history.consecutive_losses()."""
+
+    def _run(self, history: list) -> int:
+        import trade_history
+        with patch("trade_history.db.history_recent", return_value=history):
+            return trade_history.consecutive_losses()
+
+    def test_empty_history_returns_zero(self):
+        self.assertEqual(self._run([]), 0)
+
+    def test_single_win_returns_zero(self):
+        self.assertEqual(self._run(["win"]), 0)
+
+    def test_single_loss_returns_one(self):
+        self.assertEqual(self._run(["loss"]), 1)
+
+    def test_three_consecutive_losses(self):
+        self.assertEqual(self._run(["win", "loss", "loss", "loss"]), 3)
+
+    def test_win_breaks_streak(self):
+        self.assertEqual(self._run(["loss", "loss", "win", "loss"]), 1)
+
+    def test_all_losses_counted(self):
+        self.assertEqual(self._run(["loss"] * 5), 5)
+
+    def test_win_at_end_resets_count(self):
+        self.assertEqual(self._run(["loss", "loss", "win"]), 0)
+
+    def test_alternating_returns_one(self):
+        self.assertEqual(self._run(["win", "loss", "win", "loss"]), 1)
+
+
+# ─── 13. SPREAD FILTER LOGIC ─────────────────────────────────────────────────
+
+class TestSpreadFilterLogic(unittest.TestCase):
+    """Verify the spread pip calculation and per-instrument override logic."""
+
+    def _spread_pips(self, pair: str, bid: float, ask: float) -> float:
+        import config
+        pip = config.INSTRUMENT_PIP.get(pair, config.INSTRUMENT_PIP_DEFAULT)
+        return (ask - bid) / pip
+
+    def _spread_limit(self, pair: str) -> float:
+        import config
+        return config.INSTRUMENT_SPREAD_MAX_PIPS.get(pair, config.SPREAD_MAX_PIPS)
+
+    def _is_blocked(self, pair: str, bid: float, ask: float) -> bool:
+        return self._spread_pips(pair, bid, ask) > self._spread_limit(pair)
+
+    def test_eur_usd_tight_spread_passes(self):
+        # 0.0002 / 0.0001 = 2 pips, limit 3.0 → pass
+        self.assertFalse(self._is_blocked("EUR_USD", 1.10000, 1.10020))
+
+    def test_eur_usd_wide_spread_blocked(self):
+        # 0.00040 / 0.0001 = 4 pips, limit 3.0 → block
+        self.assertTrue(self._is_blocked("EUR_USD", 1.10000, 1.10040))
+
+    def test_eur_usd_exact_limit_passes(self):
+        # exactly 3.0 pips (not strictly greater) → pass
+        self.assertFalse(self._is_blocked("EUR_USD", 1.10000, 1.10030))
+
+    def test_xau_usd_uses_per_instrument_limit(self):
+        import config
+        limit = config.INSTRUMENT_SPREAD_MAX_PIPS["XAU_USD"]
+        self.assertEqual(limit, 80.0)
+
+    def test_xau_usd_normal_spread_passes(self):
+        # 0.30 / 0.01 = 30 pips, limit 80.0 → pass
+        self.assertFalse(self._is_blocked("XAU_USD", 3326.00, 3326.30))
+
+    def test_xau_usd_excessive_spread_blocked(self):
+        # 0.90 / 0.01 = 90 pips, limit 80.0 → block
+        self.assertTrue(self._is_blocked("XAU_USD", 3326.00, 3326.90))
+
+    def test_wtico_usd_normal_spread_passes(self):
+        # 0.030 / 0.001 = 30 pips, limit 50.0 → pass
+        self.assertFalse(self._is_blocked("WTICO_USD", 79.000, 79.030))
+
+    def test_wtico_usd_excessive_spread_blocked(self):
+        # 0.060 / 0.001 = 60 pips, limit 50.0 → block
+        self.assertTrue(self._is_blocked("WTICO_USD", 79.000, 79.060))
+
+    def test_usd_jpy_pip_size_is_0_01(self):
+        import config
+        self.assertEqual(config.INSTRUMENT_PIP["USD_JPY"], 0.01)
+
+    def test_unknown_pair_uses_global_limit(self):
+        import config
+        self.assertNotIn("GBP_USD", config.INSTRUMENT_SPREAD_MAX_PIPS)
+        self.assertEqual(self._spread_limit("GBP_USD"), config.SPREAD_MAX_PIPS)
+
+
+# ─── 14. DB: PAIR STATS ───────────────────────────────────────────────────────
+
+class TestPairStats(unittest.TestCase):
+    """Tests for db.pair_stats() against an isolated temp database."""
+
+    def setUp(self):
+        import db as _db
+        self._db = _db
+        self._orig_path = _db.DB_PATH
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        self._tmp_name = tmp.name
+        _db.DB_PATH = self._tmp_name
+        # create tables directly — avoids _migrate_json() which imports live JSON files
+        conn = _db._connect()
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS bot_log (
+                id   INTEGER PRIMARY KEY AUTOINCREMENT,
+                time TEXT NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS trade_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                time TEXT NOT NULL, result TEXT NOT NULL
+            );
+        """)
+        conn.commit()
+        conn.close()
+
+    def tearDown(self):
+        self._db.DB_PATH = self._orig_path
+        if os.path.exists(self._tmp_name):
+            os.unlink(self._tmp_name)
+
+    def _insert(self, pair: str, result: str, pnl_pips: float) -> None:
+        self._db.log_append({"type": "trade_close", "pair": pair,
+                             "result": result, "pnl_pips": pnl_pips, "time": "2024-01-01"})
+
+    def test_empty_db_returns_empty(self):
+        self.assertEqual(self._db.pair_stats(), [])
+
+    def test_single_win(self):
+        self._insert("EUR_USD", "win", 25.0)
+        stats = self._db.pair_stats()
+        self.assertEqual(len(stats), 1)
+        s = stats[0]
+        self.assertEqual(s["pair"], "EUR_USD")
+        self.assertEqual(s["wins"], 1)
+        self.assertEqual(s["losses"], 0)
+        self.assertEqual(s["trades"], 1)
+        self.assertAlmostEqual(s["pnl_pips"], 25.0)
+        self.assertAlmostEqual(s["win_rate"], 100.0)
+
+    def test_single_loss(self):
+        self._insert("GBP_USD", "loss", -15.0)
+        s = self._db.pair_stats()[0]
+        self.assertEqual(s["losses"], 1)
+        self.assertEqual(s["wins"], 0)
+        self.assertAlmostEqual(s["win_rate"], 0.0)
+
+    def test_win_rate_calculation(self):
+        self._insert("EUR_USD", "win", 25.0)
+        self._insert("EUR_USD", "loss", -15.0)
+        self._insert("EUR_USD", "win", 20.0)
+        s = self._db.pair_stats()[0]
+        self.assertEqual(s["trades"], 3)
+        self.assertEqual(s["wins"], 2)
+        self.assertAlmostEqual(s["win_rate"], 66.7, places=1)
+
+    def test_multiple_pairs_sorted_alphabetically(self):
+        self._insert("GBP_USD", "win", 10.0)
+        self._insert("EUR_USD", "win", 20.0)
+        stats = self._db.pair_stats()
+        self.assertEqual(len(stats), 2)
+        self.assertEqual(stats[0]["pair"], "EUR_USD")
+        self.assertEqual(stats[1]["pair"], "GBP_USD")
+
+    def test_pnl_accumulates_across_trades(self):
+        self._insert("EUR_USD", "win", 25.0)
+        self._insert("EUR_USD", "loss", -10.0)
+        s = self._db.pair_stats()[0]
+        self.assertAlmostEqual(s["pnl_pips"], 15.0)
+
+    def test_non_trade_close_entries_ignored(self):
+        self._db.log_append({"type": "signal", "pair": "EUR_USD", "time": "2024-01-01"})
+        self.assertEqual(self._db.pair_stats(), [])
+
+
+# ─── 15. DB: TRADE PNL SERIES ─────────────────────────────────────────────────
+
+class TestTradePnlSeries(unittest.TestCase):
+    """Tests for db.trade_pnl_series() against an isolated temp database."""
+
+    def setUp(self):
+        import db as _db
+        self._db = _db
+        self._orig_path = _db.DB_PATH
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        self._tmp_name = tmp.name
+        _db.DB_PATH = self._tmp_name
+        conn = _db._connect()
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS bot_log (
+                id   INTEGER PRIMARY KEY AUTOINCREMENT,
+                time TEXT NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL
+            );
+        """)
+        conn.commit()
+        conn.close()
+
+    def tearDown(self):
+        self._db.DB_PATH = self._orig_path
+        if os.path.exists(self._tmp_name):
+            os.unlink(self._tmp_name)
+
+    def _insert(self, pnl_pips: float) -> None:
+        result = "win" if pnl_pips > 0 else "loss"
+        self._db.log_append({"type": "trade_close", "pair": "EUR_USD",
+                             "result": result, "pnl_pips": pnl_pips, "time": "2024-01-01"})
+
+    def test_empty_db_returns_empty(self):
+        self.assertEqual(self._db.trade_pnl_series(), [])
+
+    def test_single_entry(self):
+        self._insert(25.0)
+        series = self._db.trade_pnl_series()
+        self.assertEqual(len(series), 1)
+        self.assertAlmostEqual(series[0], 25.0)
+
+    def test_ordered_oldest_first(self):
+        for pnl in [10.0, -5.0, 20.0]:
+            self._insert(pnl)
+        series = self._db.trade_pnl_series()
+        self.assertAlmostEqual(series[0], 10.0)
+        self.assertAlmostEqual(series[1], -5.0)
+        self.assertAlmostEqual(series[2], 20.0)
+
+    def test_non_trade_close_excluded(self):
+        self._db.log_append({"type": "signal", "pair": "EUR_USD", "time": "2024-01-01"})
+        self._insert(15.0)
+        series = self._db.trade_pnl_series()
+        self.assertEqual(len(series), 1)
+
+    def test_values_are_floats(self):
+        self._insert(10.0)
+        series = self._db.trade_pnl_series()
+        self.assertIsInstance(series[0], float)
+
+    def test_negative_pnl_included(self):
+        self._insert(-12.5)
+        series = self._db.trade_pnl_series()
+        self.assertAlmostEqual(series[0], -12.5)
+
+
+# ─── 16. NEWS POST-EVENT COOL-DOWN ───────────────────────────────────────────
+
+class TestNewsPostEventCoolDown(unittest.TestCase):
+    """
+    Unit tests for the asymmetric news_blackout_active() logic.
+
+    Mocks _fetch_calendar() to inject synthetic events so we can control
+    timing precisely without hitting the network.
+    """
+
+    def _run(self, pair: str, now_dt, events: list) -> tuple[bool, str]:
+        import news
+        with patch("news._fetch_calendar", return_value=events), \
+             patch("news.datetime") as mock_dt:
+            mock_dt.now.return_value = now_dt
+            mock_dt.fromisoformat.side_effect = lambda s: __import__("datetime").datetime.fromisoformat(s)
+            return news.news_blackout_active(pair)
+
+    def _make_event(self, currency: str, iso_time: str, impact: str = "High") -> dict:
+        return {"currency": currency, "title": "Fed Rate Decision", "date": iso_time, "impact": impact}
+
+    def _dt(self, iso: str):
+        from datetime import datetime, timezone
+        return datetime.fromisoformat(iso).replace(tzinfo=timezone.utc)
+
+    def test_pre_event_window_blocks(self):
+        event = self._make_event("USD", "2024-01-15T14:00:00Z")
+        now   = self._dt("2024-01-15T13:45:00")   # 15 min before → within 30-min pre-window
+        import news
+        with patch("news._fetch_calendar", return_value=[event]):
+            with patch("news.datetime") as m:
+                m.now.return_value = now
+                m.fromisoformat.side_effect = lambda s: __import__("datetime").datetime.fromisoformat(s)
+                blocked, reason = news.news_blackout_active("EUR_USD")
+        self.assertTrue(blocked)
+        self.assertIn("pre-event", reason)
+
+    def test_outside_pre_window_passes(self):
+        event = self._make_event("USD", "2024-01-15T14:00:00Z")
+        now   = self._dt("2024-01-15T13:00:00")   # 60 min before → outside 30-min pre-window
+        import news
+        with patch("news._fetch_calendar", return_value=[event]):
+            with patch("news.datetime") as m:
+                m.now.return_value = now
+                m.fromisoformat.side_effect = lambda s: __import__("datetime").datetime.fromisoformat(s)
+                blocked, _ = news.news_blackout_active("EUR_USD")
+        self.assertFalse(blocked)
+
+    def test_post_event_window_blocks(self):
+        event = self._make_event("USD", "2024-01-15T14:00:00Z")
+        now   = self._dt("2024-01-15T15:30:00")   # 90 min after → within 3-hour post-window
+        import news
+        with patch("news._fetch_calendar", return_value=[event]):
+            with patch("news.datetime") as m:
+                m.now.return_value = now
+                m.fromisoformat.side_effect = lambda s: __import__("datetime").datetime.fromisoformat(s)
+                blocked, reason = news.news_blackout_active("EUR_USD")
+        self.assertTrue(blocked)
+        self.assertIn("post-event", reason)
+
+    def test_post_event_reason_shows_elapsed_and_remaining(self):
+        event = self._make_event("USD", "2024-01-15T14:00:00Z")
+        now   = self._dt("2024-01-15T15:00:00")   # 60 min after
+        import news, config
+        with patch("news._fetch_calendar", return_value=[event]):
+            with patch("news.datetime") as m:
+                m.now.return_value = now
+                m.fromisoformat.side_effect = lambda s: __import__("datetime").datetime.fromisoformat(s)
+                blocked, reason = news.news_blackout_active("EUR_USD")
+        self.assertTrue(blocked)
+        self.assertIn("60min ago", reason)
+        # remaining = 3h - 1h = 2h = 120 min
+        self.assertIn("120min remaining", reason)
+
+    def test_after_post_event_window_passes(self):
+        event = self._make_event("USD", "2024-01-15T14:00:00Z")
+        now   = self._dt("2024-01-15T17:30:00")   # 3.5 hours after → outside 3-hour post-window
+        import news
+        with patch("news._fetch_calendar", return_value=[event]):
+            with patch("news.datetime") as m:
+                m.now.return_value = now
+                m.fromisoformat.side_effect = lambda s: __import__("datetime").datetime.fromisoformat(s)
+                blocked, _ = news.news_blackout_active("EUR_USD")
+        self.assertFalse(blocked)
+
+    def test_non_high_impact_event_ignored(self):
+        event = self._make_event("USD", "2024-01-15T14:00:00Z", impact="Medium")
+        now   = self._dt("2024-01-15T14:30:00")   # 30 min after
+        import news
+        with patch("news._fetch_calendar", return_value=[event]):
+            with patch("news.datetime") as m:
+                m.now.return_value = now
+                m.fromisoformat.side_effect = lambda s: __import__("datetime").datetime.fromisoformat(s)
+                blocked, _ = news.news_blackout_active("EUR_USD")
+        self.assertFalse(blocked)
+
+    def test_unrelated_currency_ignored(self):
+        event = self._make_event("JPY", "2024-01-15T14:00:00Z")
+        now   = self._dt("2024-01-15T14:30:00")
+        import news
+        with patch("news._fetch_calendar", return_value=[event]):
+            with patch("news.datetime") as m:
+                m.now.return_value = now
+                m.fromisoformat.side_effect = lambda s: __import__("datetime").datetime.fromisoformat(s)
+                blocked, _ = news.news_blackout_active("EUR_USD")
+        self.assertFalse(blocked)
+
+
+# ─── 17. REGIME CACHE VOLATILE TTL ───────────────────────────────────────────
+
+class TestRegimeCacheBehaviour(unittest.TestCase):
+    """
+    Tests for the regime cache invalidation logic:
+      - Volatile regime uses _VOLATILE_CACHE_TTL (60s) not _CACHE_TTL (300s)
+      - ATR spike bypasses the cache entirely
+    """
+
+    def _make_df(self, atr_ratio: float = 1.0, n: int = 120):
+        """Build a minimal DataFrame with ATR scaled to the requested ratio."""
+        import numpy as np
+        import pandas as pd
+        base_atr = 0.001
+        avg_atr  = base_atr
+        cur_atr  = base_atr * atr_ratio
+        atrs = np.full(n, avg_atr)
+        atrs[-1] = cur_atr
+        closes = np.full(n, 1.1)
+        df = pd.DataFrame({
+            "time":    pd.date_range("2024-01-01", periods=n, freq="h"),
+            "open":    closes, "high": closes * 1.001,
+            "low":     closes * 0.999, "close": closes,
+            "volume":  np.full(n, 10_000.0),
+            "atr":     atrs,
+            "rsi":     np.full(n, 55.0),
+            "ema_fast": np.full(n, 1.101),
+            "ema_slow": np.full(n, 1.099),
+            "adx":     np.full(n, 30.0),
+            "adx_pos": np.full(n, 25.0),
+            "adx_neg": np.full(n, 15.0),
+        })
+        return df
+
+    def test_volatile_regime_uses_short_ttl(self):
+        import regime
+        # Plant a cached volatile result that's 90 seconds old
+        regime._cache["TEST_V"] = (
+            __import__("time").time() - 90,
+            "volatile", "test"
+        )
+        # With _VOLATILE_CACHE_TTL=60, a 90-second-old volatile entry should be expired
+        with patch("regime._client") as mock_client:
+            mock_resp = mock_client.return_value.messages.create.return_value
+            mock_resp.content = [type("C", (), {"text": '{"regime":"volatile","reason":"still hot"}'})()]
+            df = self._make_df(atr_ratio=1.0)   # no spike, so spike-bypass won't fire
+            regime.get_market_regime("TEST_V", df)
+        # Claude was called because the 90s-old entry exceeded the 60s volatile TTL
+        mock_client.return_value.messages.create.assert_called_once()
+        regime._cache.pop("TEST_V", None)
+
+    def test_normal_regime_uses_long_ttl(self):
+        import regime
+        # Plant a cached trending result that's 90 seconds old (within 300s TTL)
+        regime._cache["TEST_N"] = (
+            __import__("time").time() - 90,
+            "trending_up", "test"
+        )
+        with patch("regime._client") as mock_client:
+            df = self._make_df(atr_ratio=1.0)   # no ATR spike
+            result_regime, _ = regime.get_market_regime("TEST_N", df)
+        # Cache hit — Claude was NOT called
+        mock_client.return_value.messages.create.assert_not_called()
+        self.assertEqual(result_regime, "trending_up")
+        regime._cache.pop("TEST_N", None)
+
+    def test_atr_spike_bypasses_cache(self):
+        import regime
+        # Plant a fresh cached trending_up result (only 10 seconds old)
+        regime._cache["TEST_S"] = (
+            __import__("time").time() - 10,
+            "trending_up", "strong momentum"
+        )
+        with patch("regime._client") as mock_client:
+            mock_resp = mock_client.return_value.messages.create.return_value
+            mock_resp.content = [type("C", (), {"text": '{"regime":"volatile","reason":"spike"}'})()]
+            # ATR ratio > 1.8 → spike detected → cache bypassed
+            df = self._make_df(atr_ratio=2.0)
+            result_regime, _ = regime.get_market_regime("TEST_S", df)
+        mock_client.return_value.messages.create.assert_called_once()
+        self.assertEqual(result_regime, "volatile")
+        regime._cache.pop("TEST_S", None)
+
+    def test_no_spike_uses_cache(self):
+        import regime
+        regime._cache["TEST_NS"] = (
+            __import__("time").time() - 10,
+            "trending_down", "bearish"
+        )
+        with patch("regime._client") as mock_client:
+            df = self._make_df(atr_ratio=1.2)   # below 1.8 threshold
+            result_regime, _ = regime.get_market_regime("TEST_NS", df)
+        mock_client.return_value.messages.create.assert_not_called()
+        self.assertEqual(result_regime, "trending_down")
+        regime._cache.pop("TEST_NS", None)
+
+
+# ─── 18. MARGIN PRE-CHECK ─────────────────────────────────────────────────────
+
+class TestMarginPreCheck(unittest.TestCase):
+    """
+    Tests for the margin pre-check guard in _evaluate_pair() and
+    get_margin_available() in trader.py.
+
+    The guard skips a new order if free margin (marginAvailable / NAV) falls
+    below config.MARGIN_MIN_FREE_PCT (default 20%).  On API error, it logs a
+    warning and proceeds so transient network issues don't block trading.
+    """
+
+    def setUp(self):
+        import main
+        self._orig_daily_trades = main._daily_trades
+
+    def tearDown(self):
+        import main
+        main._daily_trades = self._orig_daily_trades
+
+    def _idf(self):
+        """Indicator-augmented DataFrame for use in _evaluate_pair() tests."""
+        import numpy as np
+        df = _make_ohlcv_df()
+        n = len(df)
+        df["atr"]      = np.full(n, 0.001)
+        df["rsi"]      = np.full(n, 55.0)
+        df["ema_fast"] = np.full(n, 1.101)
+        df["ema_slow"] = np.full(n, 1.099)
+        return df
+
+    def _run_evaluate(self, margin_avail, nav, *, raises=False):
+        """
+        Run _evaluate_pair("EUR_USD") with all upstream filters mocked to pass
+        and the margin check returning (margin_avail, nav).  Returns
+        (mock_place_order, mock_filter_blocked).
+        """
+        import contextlib
+        import main
+        idf = self._idf()
+
+        filter_patches = [
+            patch("main.news_blackout_active",                  return_value=(False, "")),
+            patch("main.in_session",                            return_value=True),
+            patch("main.has_open_position",                     return_value=False),
+            patch("main.get_candles",                           return_value=_make_ohlcv_df()),
+            patch("main.add_indicators",                        return_value=idf),
+            patch("main.get_signal",                            return_value="buy"),
+            patch("main.upcoming_events",                       return_value=[]),
+            patch("main.sentiment_mod.sentiment_blocks_signal", return_value=(False, "")),
+            patch("main.sentiment_mod.get_news_sentiment",      return_value={"bias": "neutral"}),
+            patch("main.regime_mod.regime_blocks_signal",       return_value=(False, "")),
+            patch("main.regime_mod.get_market_regime",          return_value=("trending_up", "")),
+            patch("main.all_filters_pass",                      return_value=(True, "")),
+            patch("main.ml_filter_passes",                      return_value=(True, 0.75)),
+            patch("main.correlation_ok",                        return_value=(True, "")),
+            patch("main.get_price",  return_value={"ask": 1.1001, "bid": 1.0999, "mid": 1.1000}),
+            patch("main.get_sl_tp",  return_value=(1.095, 1.115)),
+            patch("main.dynamic_units", return_value=1000),
+        ]
+        margin_patch = (
+            patch("main.get_margin_available", side_effect=Exception("API err"))
+            if raises else
+            patch("main.get_margin_available", return_value=(margin_avail, nav))
+        )
+
+        mock_place = mock_blocked = None
+        with contextlib.ExitStack() as stack:
+            for p in filter_patches:
+                stack.enter_context(p)
+            stack.enter_context(margin_patch)
+            mock_place   = stack.enter_context(patch("main.place_order", return_value={}))
+            mock_blocked = stack.enter_context(patch("main.bot_log.filter_blocked"))
+            stack.enter_context(patch("main.bot_log.trade_open"))
+            stack.enter_context(patch("main.alerts.trade_opened"))
+            stack.enter_context(patch("main.alerts.send"))
+            main._evaluate_pair("EUR_USD", [])
+
+        return mock_place, mock_blocked
+
+    # ── config checks ───────────────────────────────────────────────────────────
+
+    def test_config_margin_min_free_pct_default(self):
+        import config
+        self.assertAlmostEqual(config.MARGIN_MIN_FREE_PCT, 20.0)
+
+    def test_xau_usd_max_units_capped(self):
+        import config
+        self.assertLessEqual(config.INSTRUMENT_MAX_UNITS["XAU_USD"], 10)
+
+    def test_wtico_usd_max_units_capped(self):
+        import config
+        self.assertLessEqual(config.INSTRUMENT_MAX_UNITS["WTICO_USD"], 100)
+
+    # ── get_margin_available() ──────────────────────────────────────────────────
+
+    def test_get_margin_available_returns_correct_values(self):
+        import trader
+        fake_acct = {"marginAvailable": "8000.00", "NAV": "10000.00"}
+        with patch("trader.accounts_ep.AccountSummary") as mock_ep, \
+             patch("trader._retry_request"):
+            mock_ep.return_value.response = {"account": fake_acct}
+            margin, nav = trader.get_margin_available()
+        self.assertAlmostEqual(margin, 8000.0)
+        self.assertAlmostEqual(nav, 10000.0)
+
+    # ── _evaluate_pair() margin guard ───────────────────────────────────────────
+
+    def test_margin_check_blocks_below_threshold(self):
+        """15% free margin is below the 20% threshold — order must be skipped."""
+        mock_place, mock_blocked = self._run_evaluate(1500.0, 10000.0)
+        mock_place.assert_not_called()
+        mock_blocked.assert_called_once()
+        self.assertIn("margin", mock_blocked.call_args[0][1])
+
+    def test_margin_check_passes_above_threshold(self):
+        """80% free margin is well above the 20% threshold — order is placed."""
+        mock_place, _ = self._run_evaluate(8000.0, 10000.0)
+        mock_place.assert_called_once()
+
+    def test_margin_exactly_at_threshold_passes(self):
+        """20.0% equals the threshold — check is strict (<), so order is placed."""
+        mock_place, _ = self._run_evaluate(2000.0, 10000.0)
+        mock_place.assert_called_once()
+
+    def test_margin_check_proceeds_on_api_error(self):
+        """If get_margin_available() raises, order still proceeds (safe fallback)."""
+        mock_place, _ = self._run_evaluate(0, 0, raises=True)
+        mock_place.assert_called_once()
 
 
 if __name__ == "__main__":

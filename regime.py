@@ -7,8 +7,11 @@ Classifies the current market as one of:
   ranging       — sideways, EMAs compressed, skip new signals
   volatile      — abnormally large moves, skip until stable
 
-Result is cached per pair for 5 minutes so we don't hit the API
-on every 60-second bot cycle.
+Cache behaviour:
+  Normal regimes are cached for 5 minutes (avoid hammering the API every cycle).
+  Volatile regime uses a 1-cycle (60s) TTL — don't hold stale "volatile" for 5 min.
+  ATR spike pre-check: if ATR ratio > 1.8 on the incoming data, the cache is bypassed
+  entirely so a stale "trending" classification is never served during a fast event.
 """
 
 import json
@@ -38,7 +41,8 @@ def _extract_json(text: str) -> dict:
 
 log = logging.getLogger(__name__)
 
-_CACHE_TTL = 300   # 5 minutes
+_CACHE_TTL          = 300   # 5 minutes for normal regimes
+_VOLATILE_CACHE_TTL = 60    # 1 cycle when volatile — reassess each tick
 
 # ─── CLIENT ───────────────────────────────────────────────────────────────────
 
@@ -72,9 +76,28 @@ def get_market_regime(pair: str, df: pd.DataFrame) -> tuple[str, str]:
     Falls back to 'ranging' on any error (safe default — avoids bad entries).
     """
     now = time.time()
-    if pair in _cache:
+
+    # Pre-check: if ATR is already spiking, bypass the cache so a stale
+    # "trending" classification is never served during a fast-moving event.
+    atr_spike = False
+    try:
+        atr_series = df["atr"].dropna()
+        if len(atr_series) >= 20:
+            _atr_now = float(atr_series.iloc[-1])
+            _atr_avg = float(atr_series.tail(100).mean())
+            if _atr_avg > 0:
+                atr_spike = (_atr_now / _atr_avg) > 1.8
+    except Exception:
+        pass
+
+    if atr_spike and pair in _cache:
+        log.info(f"{pair}: ATR spike detected — bypassing regime cache for fresh assessment")
+
+    if pair in _cache and not atr_spike:
         ts, regime, reason = _cache[pair]
-        if now - ts < _CACHE_TTL:
+        # Volatile regime gets a much shorter TTL — don't hold stale "volatile" for 5 min
+        ttl = _VOLATILE_CACHE_TTL if regime == "volatile" else _CACHE_TTL
+        if now - ts < ttl:
             log.debug(f"{pair}: regime cache hit → {regime}")
             return regime, reason
 
