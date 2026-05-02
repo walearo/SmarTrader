@@ -361,7 +361,8 @@ class TestAlertGating(unittest.TestCase):
         import alerts
         with patch("alerts.requests.post") as mock_post, \
              patch("alerts.config.TELEGRAM_BOT_TOKEN", "tok"), \
-             patch("alerts.config.TELEGRAM_CHAT_ID",   "cid"):
+             patch("alerts.config.TELEGRAM_CHAT_ID",   "cid"), \
+             patch("alerts.bot_log.error"):
             fn(*args, **kwargs)
             return mock_post.called
 
