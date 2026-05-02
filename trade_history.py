@@ -22,3 +22,15 @@ def get_history() -> list[str]:
         return db.history_recent(_KEEP)
     except Exception:
         return []
+
+
+def consecutive_losses() -> int:
+    """Return the current streak of consecutive losses (0 if last result was a win or no history)."""
+    history = get_history()
+    count = 0
+    for result in reversed(history):
+        if result == "loss":
+            count += 1
+        else:
+            break
+    return count

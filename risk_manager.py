@@ -16,7 +16,7 @@ import config
 from data import get_candles
 from strategy import add_indicators
 from trade_history import get_history, record_trade_result          # noqa: F401 (re-exported)
-from trader import get_account_equity, update_trade_sl, partial_close_trade
+from trader import get_account_equity, update_trade_sl, partial_close_trade, close_trade
 
 log = logging.getLogger(__name__)
 
@@ -181,6 +181,22 @@ def manage_open_trades(
         if current is None:
             continue
 
+        trade_id = trade["id"]
+
+        # ── trade timeout ──
+        if config.MAX_TRADE_HOURS > 0:
+            open_time_str = trade.get("openTime", "")
+            if open_time_str:
+                open_time = datetime.fromisoformat(open_time_str.replace("Z", "+00:00"))
+                age_hours = (datetime.now(timezone.utc) - open_time).total_seconds() / 3600
+                if age_hours >= config.MAX_TRADE_HOURS:
+                    log.info(f"{instrument} [{trade_id}]: timed out after {age_hours:.1f}h — closing at market")
+                    try:
+                        close_trade(trade_id)
+                    except Exception as e:
+                        log.error(f"Trade timeout close failed for {trade_id}: {e}")
+                    continue
+
         entry    = float(trade["price"])
         units    = float(trade["currentUnits"])
         sl_order = trade.get("stopLossOrder")
@@ -198,7 +214,6 @@ def manage_open_trades(
         r_multiple = profit / initial_risk
 
         # ── partial TP ──
-        trade_id = trade["id"]
         if (r_multiple >= config.PARTIAL_TP_R
                 and trade_id not in _partial_tp_done
                 and abs(units) > 1):

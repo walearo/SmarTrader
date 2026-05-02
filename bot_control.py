@@ -106,6 +106,10 @@ SETTINGS_KEYS = [
     "NEWS_BLACKOUT_MINUTES",
     "PAIRS",
     "SESSIONS",
+    "SPREAD_MAX_PIPS",
+    "MAX_TRADE_HOURS",
+    "MAX_DAILY_TRADES",
+    "MAX_CONSECUTIVE_LOSSES",
 ]
 
 ALL_PAIRS = [
@@ -150,6 +154,10 @@ def get_bot_settings() -> dict:
         "NEWS_BLACKOUT_MINUTES": _cfg.NEWS_BLACKOUT_MINUTES,
         "PAIRS":                 list(_cfg.PAIRS),
         "SESSIONS":              [list(s) for s in _cfg.SESSIONS],
+        "SPREAD_MAX_PIPS":       _cfg.SPREAD_MAX_PIPS,
+        "MAX_TRADE_HOURS":       _cfg.MAX_TRADE_HOURS,
+        "MAX_DAILY_TRADES":      _cfg.MAX_DAILY_TRADES,
+        "MAX_CONSECUTIVE_LOSSES": _cfg.MAX_CONSECUTIVE_LOSSES,
     }
     saved = _read_settings()
     result = dict(defaults)

@@ -123,6 +123,21 @@ ML_MIN_CONFIDENCE  = 0.0    # set to 0.0 to bypass ML filter
                             # then set to the recommended threshold printed at end
 ML_MODEL_PATH      = "model.pkl"
 
+# ─── SPREAD FILTER ────────────────────────────────────────────────────────────
+# Skip entry if current spread exceeds this threshold (in pips).
+SPREAD_MAX_PIPS: float = 3.0
+INSTRUMENT_SPREAD_MAX_PIPS: dict[str, float] = {
+    "XAU_USD":   80.0,   # Gold spread is ~30-50 pips at pip=0.01
+    "WTICO_USD": 50.0,   # Oil spread is ~20-40 pips at pip=0.001
+}
+
+# ─── TRADE MANAGEMENT ─────────────────────────────────────────────────────────
+MAX_TRADE_HOURS = 24      # close stalled trades after this many hours (0 = disabled)
+
+# ─── DAILY LIMITS ─────────────────────────────────────────────────────────────
+MAX_DAILY_TRADES       = 6   # max new trades opened per day (0 = unlimited)
+MAX_CONSECUTIVE_LOSSES = 4   # pause new entries after this many losses in a row (0 = disabled)
+
 # ─── MONITORING ───────────────────────────────────────────────────────────────
 ALERT_PRICE_MOVE_PIPS  = 20
 CHECK_INTERVAL_SECONDS = 60

@@ -250,5 +250,64 @@ def state_get(key: str, default=None):
     return json.loads(row["value"]) if row else default
 
 
+# ── analytics ──────────────────────────────────────────────────────────────────
+
+def pair_stats() -> list[dict]:
+    """Return per-pair trade stats aggregated from bot_log trade_close entries."""
+    conn  = _connect()
+    rows  = conn.execute(
+        "SELECT data FROM bot_log WHERE type='trade_close' ORDER BY id"
+    ).fetchall()
+    conn.close()
+
+    stats: dict[str, dict] = {}
+    for row in rows:
+        try:
+            e    = json.loads(row["data"])
+            pair = e.get("pair", "")
+            if not pair:
+                continue
+            s = stats.setdefault(pair, {"wins": 0, "losses": 0, "pnl_pips": 0.0})
+            s["pnl_pips"] += float(e.get("pnl_pips", 0))
+            if e.get("result") == "win":
+                s["wins"] += 1
+            elif e.get("result") == "loss":
+                s["losses"] += 1
+        except Exception:
+            pass
+
+    result = []
+    for pair, s in sorted(stats.items()):
+        total    = s["wins"] + s["losses"]
+        win_rate = s["wins"] / total if total else 0.0
+        result.append({
+            "pair":     pair,
+            "trades":   total,
+            "wins":     s["wins"],
+            "losses":   s["losses"],
+            "win_rate": round(win_rate * 100, 1),
+            "pnl_pips": round(s["pnl_pips"], 1),
+        })
+    return result
+
+
+def trade_pnl_series() -> list[float]:
+    """Return ordered list of P&L in pips for all closed trades (for Sharpe calculation)."""
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT data FROM bot_log WHERE type='trade_close' ORDER BY id"
+    ).fetchall()
+    conn.close()
+    series = []
+    for row in rows:
+        try:
+            e = json.loads(row["data"])
+            if "pnl_pips" in e:
+                series.append(float(e["pnl_pips"]))
+        except Exception:
+            pass
+    return series
+
+
 # Initialise on first import so any module that imports db gets a ready database.
 init()

@@ -396,9 +396,12 @@ async def api_save_settings(request: Request):
 
     errors = []
     _int_ranges   = [("MAX_CONCURRENT_TRADES", 1, 10), ("UNITS", 100, 100_000),
-                     ("ALERT_PRICE_MOVE_PIPS", 1, 500), ("NEWS_BLACKOUT_MINUTES", 0, 180)]
+                     ("ALERT_PRICE_MOVE_PIPS", 1, 500), ("NEWS_BLACKOUT_MINUTES", 0, 180),
+                     ("MAX_TRADE_HOURS", 0, 168), ("MAX_DAILY_TRADES", 0, 50),
+                     ("MAX_CONSECUTIVE_LOSSES", 0, 20)]
     _float_ranges = [("RISK_PCT_PER_TRADE", 0.1, 5.0),
-                     ("MAX_DAILY_LOSS_PCT", 0.5, 20.0), ("MAX_WEEKLY_LOSS_PCT", 1.0, 50.0)]
+                     ("MAX_DAILY_LOSS_PCT", 0.5, 20.0), ("MAX_WEEKLY_LOSS_PCT", 1.0, 50.0),
+                     ("SPREAD_MAX_PIPS", 0.5, 200.0)]
 
     for key, lo, hi in _int_ranges:
         if key in body:
@@ -443,6 +446,35 @@ def api_reset_settings(request: Request):
         return {"error": "unauthorized"}
     bot_control.reset_bot_settings()
     return {"status": "reset"}
+
+
+@app.get("/api/pair-stats")
+def api_pair_stats(request: Request):
+    if not authenticated(request):
+        return {"error": "unauthorized"}
+    import statistics
+    pair_stats = db.pair_stats()
+    pnl_series = db.trade_pnl_series()
+    sharpe = None
+    if len(pnl_series) >= 2:
+        mean  = statistics.mean(pnl_series)
+        stdev = statistics.stdev(pnl_series)
+        sharpe = round(mean / stdev, 3) if stdev > 0 else 0.0
+    avg_win  = round(statistics.mean([p for p in pnl_series if p > 0]), 1) if any(p > 0 for p in pnl_series) else 0
+    avg_loss = round(statistics.mean([p for p in pnl_series if p < 0]), 1) if any(p < 0 for p in pnl_series) else 0
+    total_trades = len(pnl_series)
+    total_pnl    = round(sum(pnl_series), 1)
+    wins         = sum(1 for p in pnl_series if p > 0)
+    overall_wr   = round(wins / total_trades * 100, 1) if total_trades else 0
+    return {
+        "pair_stats":    pair_stats,
+        "sharpe":        sharpe,
+        "avg_win_pips":  avg_win,
+        "avg_loss_pips": avg_loss,
+        "total_trades":  total_trades,
+        "total_pnl":     total_pnl,
+        "overall_wr":    overall_wr,
+    }
 
 
 # ─── ROUTES — DATA ────────────────────────────────────────────────────────────
@@ -668,6 +700,17 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .tab-btn:hover{color:var(--text)}
 .tab-btn.active{color:var(--blue);border-bottom-color:var(--blue)}
 .tab-pane{display:none}.tab-pane.active{display:block}
+
+/* ── Per-pair stats ──────────────────────────────────────────────────────────── */
+.ps-summary{display:flex;gap:24px;flex-wrap:wrap;padding:10px 0 14px;border-bottom:1px solid #21262d;margin-bottom:12px}
+.ps-summary-item{display:flex;flex-direction:column;align-items:center}
+.ps-summary-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.ps-summary-value{font-size:18px;font-weight:700;color:var(--fg)}
+.ps-table{width:100%;border-collapse:collapse;font-size:13px}
+.ps-table th{text-align:left;padding:6px 10px;color:var(--muted);font-weight:600;font-size:11px;border-bottom:1px solid #21262d}
+.ps-table td{padding:6px 10px;border-bottom:1px solid #161b22}
+.ps-table tr:last-child td{border-bottom:none}
+.ps-pos{color:var(--green)}.ps-neg{color:var(--red)}
 
 /* ── Journal ────────────────────────────────────────────────────────────────── */
 .journal-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}
@@ -917,6 +960,14 @@ input:checked~.tgl-slider:before{transform:translateX(16px);background:#fff}
         <button class="hdr-btn" onclick="loadJournal()">↻ Refresh</button>
       </div>
       <div id="j-entries"><div class="empty">No entries yet</div></div>
+    </div>
+    <!-- Per-Pair Stats + Sharpe -->
+    <div class="row-full tcard" style="margin-bottom:16px">
+      <div class="tcard-hdr">
+        <h2>Per-Pair Performance</h2>
+        <button class="hdr-btn" onclick="loadPairStats()">↻ Refresh</button>
+      </div>
+      <div id="pair-stats-body"><div class="empty">Loading...</div></div>
     </div>
   </div><!-- end tab-journal -->
 
@@ -1216,6 +1267,46 @@ async function toggleAlert(alertType, checked) {
   toast((ALERT_LABELS[alertType] || alertType) + ' ' + (on ? 'enabled' : 'disabled'), on ? '#3fb950' : '#f85149');
 }
 
+// ── Per-Pair Stats ─────────────────────────────────────────────────────────────
+let _pairStatsLoaded = false;
+async function loadPairStats(force = false) {
+  if (_pairStatsLoaded && !force) return;
+  const el = $('pair-stats-body');
+  if (!el) return;
+  const d = await fetch('/api/pair-stats').then(r => r.json());
+  _pairStatsLoaded = true;
+  if (d.error) { el.innerHTML = `<div class="empty">${d.error}</div>`; return; }
+  const wr = (d.overall_wr ?? 0).toFixed(1);
+  const sharpe = d.sharpe !== null && d.sharpe !== undefined ? d.sharpe.toFixed(3) : '—';
+  const pnlClass = d.total_pnl >= 0 ? 'ps-pos' : 'ps-neg';
+  const pnlSign  = d.total_pnl >= 0 ? '+' : '';
+  el.innerHTML = `
+    <div class="ps-summary">
+      <div class="ps-summary-item"><span class="ps-summary-label">Total Trades</span><span class="ps-summary-value">${d.total_trades}</span></div>
+      <div class="ps-summary-item"><span class="ps-summary-label">Win Rate</span><span class="ps-summary-value">${wr}%</span></div>
+      <div class="ps-summary-item"><span class="ps-summary-label">Total P&amp;L</span><span class="ps-summary-value ${pnlClass}">${pnlSign}${d.total_pnl} pips</span></div>
+      <div class="ps-summary-item"><span class="ps-summary-label">Avg Win</span><span class="ps-summary-value ps-pos">+${d.avg_win_pips}</span></div>
+      <div class="ps-summary-item"><span class="ps-summary-label">Avg Loss</span><span class="ps-summary-value ps-neg">${d.avg_loss_pips}</span></div>
+      <div class="ps-summary-item"><span class="ps-summary-label">Sharpe (per trade)</span><span class="ps-summary-value">${sharpe}</span></div>
+    </div>
+    ${d.pair_stats.length === 0 ? '<div class="empty">No closed trades yet</div>' : `
+    <table class="ps-table">
+      <thead><tr><th>Pair</th><th>Trades</th><th>Wins</th><th>Losses</th><th>Win Rate</th><th>Total P&amp;L (pips)</th></tr></thead>
+      <tbody>${d.pair_stats.map(p => {
+        const cls = p.pnl_pips >= 0 ? 'ps-pos' : 'ps-neg';
+        const sign = p.pnl_pips >= 0 ? '+' : '';
+        return `<tr>
+          <td style="font-weight:600">${p.pair}</td>
+          <td>${p.trades}</td>
+          <td class="ps-pos">${p.wins}</td>
+          <td class="ps-neg">${p.losses}</td>
+          <td>${p.win_rate}%</td>
+          <td class="${cls}">${sign}${p.pnl_pips}</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`}`;
+}
+
 // ── Settings ──────────────────────────────────────────────────────────────────
 const ALL_PAIRS = ['EUR_USD','GBP_USD','USD_JPY','AUD_USD','USD_CHF','USD_CAD','NZD_USD','XAU_USD','WTICO_USD'];
 const SESSION_NAMES = ['London','New York','Asian','Custom'];
@@ -1274,12 +1365,20 @@ function renderSettingsForm(d) {
       </div>
     </div>
     <div class="settings-section">
-      <div class="settings-section-title">Filters</div>
+      <div class="settings-section-title">Filters &amp; Limits</div>
       <div class="settings-grid">
         <div class="settings-row"><label class="settings-label">News Blackout (minutes)</label>
           <input type="number" id="s-NEWS_BLACKOUT_MINUTES" class="settings-input" value="${d.NEWS_BLACKOUT_MINUTES}" min="0" max="180" step="5"></div>
         <div class="settings-row"><label class="settings-label">Price Alert Threshold (pips)</label>
           <input type="number" id="s-ALERT_PRICE_MOVE_PIPS" class="settings-input" value="${d.ALERT_PRICE_MOVE_PIPS}" min="1" max="500" step="1"></div>
+        <div class="settings-row"><label class="settings-label">Max Spread (pips, 0=off)</label>
+          <input type="number" id="s-SPREAD_MAX_PIPS" class="settings-input" value="${d.SPREAD_MAX_PIPS}" min="0.5" max="200" step="0.5"></div>
+        <div class="settings-row"><label class="settings-label">Trade Timeout (hours, 0=off)</label>
+          <input type="number" id="s-MAX_TRADE_HOURS" class="settings-input" value="${d.MAX_TRADE_HOURS}" min="0" max="168" step="1"></div>
+        <div class="settings-row"><label class="settings-label">Max Trades/Day (0=unlimited)</label>
+          <input type="number" id="s-MAX_DAILY_TRADES" class="settings-input" value="${d.MAX_DAILY_TRADES}" min="0" max="50" step="1"></div>
+        <div class="settings-row"><label class="settings-label">Consecutive Loss Limit (0=off)</label>
+          <input type="number" id="s-MAX_CONSECUTIVE_LOSSES" class="settings-input" value="${d.MAX_CONSECUTIVE_LOSSES}" min="0" max="20" step="1"></div>
       </div>
     </div>
     <div class="settings-section">
@@ -1311,8 +1410,12 @@ async function saveSettings() {
     RISK_PCT_PER_TRADE:    parseFloat($('s-RISK_PCT_PER_TRADE').value),
     MAX_DAILY_LOSS_PCT:    parseFloat($('s-MAX_DAILY_LOSS_PCT').value),
     MAX_WEEKLY_LOSS_PCT:   parseFloat($('s-MAX_WEEKLY_LOSS_PCT').value),
-    ALERT_PRICE_MOVE_PIPS: parseInt($('s-ALERT_PRICE_MOVE_PIPS').value),
-    NEWS_BLACKOUT_MINUTES: parseInt($('s-NEWS_BLACKOUT_MINUTES').value),
+    ALERT_PRICE_MOVE_PIPS:  parseInt($('s-ALERT_PRICE_MOVE_PIPS').value),
+    NEWS_BLACKOUT_MINUTES:  parseInt($('s-NEWS_BLACKOUT_MINUTES').value),
+    SPREAD_MAX_PIPS:        parseFloat($('s-SPREAD_MAX_PIPS').value),
+    MAX_TRADE_HOURS:        parseInt($('s-MAX_TRADE_HOURS').value),
+    MAX_DAILY_TRADES:       parseInt($('s-MAX_DAILY_TRADES').value),
+    MAX_CONSECUTIVE_LOSSES: parseInt($('s-MAX_CONSECUTIVE_LOSSES').value),
     PAIRS: pairs, SESSIONS: sessions,
   };
 
@@ -1553,7 +1656,7 @@ function switchTab(name) {
     if (b.textContent.toLowerCase().includes(labelMap[name] || name))
       b.classList.add('active');
   });
-  if (name === 'journal')  loadJournal();
+  if (name === 'journal')  { loadJournal(); loadPairStats(); }
   if (name === 'settings') loadSettings();
 }
 

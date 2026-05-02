@@ -28,6 +28,24 @@ log = logging.getLogger(__name__)
 _model = None
 
 
+_MODEL_STALE_DAYS = 30   # warn if model file is older than this
+
+
+def check_model_staleness() -> None:
+    """Log a warning if the model file is older than _MODEL_STALE_DAYS days.
+    Called once daily from _daily_reset(). Retrain with: python train_ml.py --days 730
+    """
+    if not os.path.exists(config.ML_MODEL_PATH):
+        return
+    import time as _time
+    age_days = (_time.time() - os.path.getmtime(config.ML_MODEL_PATH)) / 86400
+    if age_days >= _MODEL_STALE_DAYS:
+        log.warning(
+            f"ML model is {age_days:.0f} days old (limit: {_MODEL_STALE_DAYS}). "
+            "Retrain with: python train_ml.py --days 730"
+        )
+
+
 def _load_model():
     global _model
     if _model is None:

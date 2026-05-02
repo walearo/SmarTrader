@@ -179,3 +179,11 @@ def partial_close_trade(trade_id: str, units: int) -> dict:
     )
     client.request(r)
     return r.response
+
+
+def close_trade(trade_id: str) -> dict:
+    """Close all units of a specific trade by ID."""
+    client = _client()
+    r = trades_ep.TradeClose(accountID=config.OANDA_ACCOUNT_ID, tradeID=trade_id)
+    client.request(r)
+    return r.response

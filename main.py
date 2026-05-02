@@ -31,7 +31,7 @@ from trader import place_order, has_open_position, get_open_trades, get_closed_t
 from monitor import check_price_moves
 from filters import all_filters_pass, in_session, correlation_ok
 from news import news_blackout_active, upcoming_events
-from ml_model import ml_filter_passes
+from ml_model import ml_filter_passes, check_model_staleness
 from risk_manager import (
     dynamic_units,
     check_kill_switch,
@@ -41,7 +41,7 @@ from risk_manager import (
     clear_partial_tp,
     mark_partial_tp_done,
 )
-from trade_history import record_trade_result
+from trade_history import record_trade_result, consecutive_losses
 import bot_control
 import sentiment as sentiment_mod
 import regime as regime_mod
@@ -54,9 +54,10 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-_bot_paused   = False
-_last_day_utc = None
-_shutdown     = False
+_bot_paused    = False
+_last_day_utc  = None
+_shutdown      = False
+_daily_trades  = 0
 
 
 def _handle_signal(sig, frame):
@@ -123,11 +124,12 @@ def validate_config() -> None:
 
 def _daily_reset() -> None:
     """Tasks to run once at the start of each UTC trading day."""
-    global _last_day_utc
+    global _last_day_utc, _daily_trades
     today = datetime.now(timezone.utc).date()
     if _last_day_utc == today:
         return
-    _last_day_utc = today
+    _last_day_utc  = today
+    _daily_trades  = 0
     reset_daily_equity()
     log.info("Daily equity reset.")
 
@@ -137,6 +139,7 @@ def _daily_reset() -> None:
         log.info("Weekly equity reset (Monday).")
 
     db.prune_bot_log()
+    check_model_staleness()
 
     events = upcoming_events(hours=24)
     if events:
@@ -329,6 +332,16 @@ def run_cycle() -> None:
         )
         return
 
+    if config.MAX_DAILY_TRADES > 0 and _daily_trades >= config.MAX_DAILY_TRADES:
+        log.info(f"Daily trade cap reached ({_daily_trades}/{config.MAX_DAILY_TRADES}), skipping new signals.")
+        return
+
+    if config.MAX_CONSECUTIVE_LOSSES > 0:
+        consec = consecutive_losses()
+        if consec >= config.MAX_CONSECUTIVE_LOSSES:
+            log.warning(f"Consecutive loss limit hit ({consec}), skipping new signals for rest of day.")
+            return
+
     for pair in config.PAIRS:
         try:
             _evaluate_pair(pair, open_trades)
@@ -413,6 +426,16 @@ def _evaluate_pair(pair: str, open_trades: list = None) -> None:
     # ── 12. place order with dynamic sizing ──────────────────────────────────
     price  = get_price(pair)
     entry  = price["ask"] if signal == "buy" else price["bid"]
+
+    # spread filter — skip if spread is too wide (cost eats the edge)
+    pip           = config.INSTRUMENT_PIP.get(pair, config.INSTRUMENT_PIP_DEFAULT)
+    spread_pips   = (price["ask"] - price["bid"]) / pip
+    spread_limit  = config.INSTRUMENT_SPREAD_MAX_PIPS.get(pair, config.SPREAD_MAX_PIPS)
+    if spread_pips > spread_limit:
+        log.info(f"{pair}: spread {spread_pips:.1f} pips > limit {spread_limit} — skipping entry")
+        bot_log.filter_blocked(pair, f"spread {spread_pips:.1f} pips > limit {spread_limit}")
+        return
+
     sl, tp = get_sl_tp(df, signal, entry_price=entry, pair=pair)
     # pass entry price so sizing is accurate for USD-base pairs (USD/JPY, USD/CHF, USD/CAD)
     units  = dynamic_units(pair, float(df["atr"].iloc[-1]), current_price=entry)
@@ -437,6 +460,9 @@ def _evaluate_pair(pair: str, open_trades: list = None) -> None:
             "regime":        current_regime,
             "news_events":   [e["title"] for e in nearby_events],
         }
+
+    global _daily_trades
+    _daily_trades += 1
 
     bot_log.trade_open(pair, signal, entry, sl, tp, units)
     alerts.trade_opened(pair, signal, entry, sl, tp)
