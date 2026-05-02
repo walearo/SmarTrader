@@ -1,6 +1,7 @@
 """Place and manage orders on OANDA."""
 
 import time as _time
+import logging
 
 import oandapyV20
 import oandapyV20.endpoints.accounts as accounts_ep
@@ -11,6 +12,8 @@ from oandapyV20.exceptions import V20Error
 import requests.exceptions as _req_exc
 
 import config
+
+log = logging.getLogger(__name__)
 
 
 def _client():
@@ -52,15 +55,20 @@ def _retry_request(client, ep, max_attempts: int = 3) -> None:
 
 
 def place_order(pair: str, signal: str, sl: float, tp: float, units: int = None) -> dict:
-    """Place a market order with SL and TP."""
+    """Place a market order with SL and TP.
+
+    Raises RuntimeError if the order was not filled (FOK cancellation, margin
+    rejection, etc.) or if the fill did not open a new trade. This ensures
+    the caller never assumes a trade is live when it isn't.
+    """
     size  = units if units is not None else config.UNITS
-    units = str(size) if signal == "buy" else str(-size)
+    u_str = str(size) if signal == "buy" else str(-size)
 
     body = {
         "order": {
             "type":        "MARKET",
             "instrument":  pair,
-            "units":       units,
+            "units":       u_str,
             "stopLossOnFill":   {"price": _fmt_price(pair, sl)},
             "takeProfitOnFill": {"price": _fmt_price(pair, tp)},
             "timeInForce": "FOK",
@@ -71,7 +79,32 @@ def place_order(pair: str, signal: str, sl: float, tp: float, units: int = None)
     client = _client()
     r = orders.OrderCreate(accountID=config.OANDA_ACCOUNT_ID, data=body)
     client.request(r)
-    return r.response
+    resp = r.response
+
+    fill = resp.get("orderFillTransaction")
+    if fill is None:
+        cancel = resp.get("orderCancelTransaction", {})
+        reject = resp.get("orderRejectTransaction", {})
+        reason = (
+            cancel.get("reason")
+            or reject.get("rejectReason")
+            or resp.get("errorMessage")
+            or "unknown"
+        )
+        raise RuntimeError(f"order not filled: {reason}")
+
+    trade_opened = fill.get("tradeOpened")
+    if trade_opened is None:
+        raise RuntimeError(
+            f"order filled but no trade opened "
+            f"(tradeReduced/tradeClosed? units={fill.get('units')})"
+        )
+
+    log.info(
+        f"{pair}: fill confirmed — tradeID={trade_opened.get('tradeID')}"
+        f" price={fill.get('price')} SL={_fmt_price(pair, sl)} TP={_fmt_price(pair, tp)}"
+    )
+    return resp
 
 
 def get_open_trades() -> list:
