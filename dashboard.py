@@ -85,25 +85,35 @@ def _open_trades() -> list:
     _client().request(r)
     result = []
     for t in r.response.get("trades", []):
-        inst  = t["instrument"]
-        units = float(t["currentUnits"])
-        sl    = t.get("stopLossOrder", {}).get("price", "—")
-        tp    = t.get("takeProfitOrder", {}).get("price", "—")
-        result.append({
-            "id":           t["id"],
-            "instrument":   inst,
-            "display_name": _fmt_instrument(inst),
-            "price_dp":     _PRICE_DP.get(inst, _PRICE_DP_DEFAULT),
-            "units_suffix": _UNITS_SUFFIX.get(inst, ""),
-            "direction":    "BUY" if units > 0 else "SELL",
-            "units":        abs(int(units)),
-            "entry":        float(t["price"]),
-            "sl":           sl,
-            "tp":           tp,
-            "unrealized":   round(float(t["unrealizedPL"]), 2),
-            "opened":       t["openTime"][:16].replace("T", " "),
-        })
+        try:
+            inst  = t["instrument"]
+            units = float(t["currentUnits"])
+            sl    = t.get("stopLossOrder", {}).get("price", "—")
+            tp    = t.get("takeProfitOrder", {}).get("price", "—")
+            result.append({
+                "id":           t["id"],
+                "instrument":   inst,
+                "display_name": _fmt_instrument(inst),
+                "price_dp":     _PRICE_DP.get(inst, _PRICE_DP_DEFAULT),
+                "units_suffix": _UNITS_SUFFIX.get(inst, ""),
+                "direction":    "BUY" if units > 0 else "SELL",
+                "units":        abs(int(units)),
+                "entry":        float(t["price"]),
+                "sl":           sl,
+                "tp":           tp,
+                "unrealized":   round(float(t["unrealizedPL"]), 2),
+                "opened":       t["openTime"][:16].replace("T", " "),
+            })
+        except (KeyError, ValueError, TypeError):
+            continue
     return result
+
+
+def _safe_open_trades() -> list:
+    try:
+        return _open_trades()
+    except Exception:
+        return []
 
 
 def _closed_trades(count: int = 30) -> list:
@@ -112,35 +122,38 @@ def _closed_trades(count: int = 30) -> list:
     _client().request(r)
     result = []
     for t in r.response.get("trades", []):
-        units = float(t.get("initialUnits", 0))
-        pl    = round(float(t.get("realizedPL", 0)), 2)
-
-        duration = "—"
         try:
-            from datetime import datetime as _dt
-            open_t  = _dt.fromisoformat(t["openTime"].replace("Z", "+00:00"))
-            close_t = _dt.fromisoformat(t["closeTime"].replace("Z", "+00:00"))
-            secs    = int((close_t - open_t).total_seconds())
-            h, m    = divmod(secs // 60, 60)
-            duration = f"{h}h {m}m" if h > 0 else f"{m}m"
-        except Exception:
-            pass
+            units = float(t.get("initialUnits", 0))
+            pl    = round(float(t.get("realizedPL", 0)), 2)
 
-        inst = t["instrument"]
-        result.append({
-            "instrument":   inst,
-            "display_name": _fmt_instrument(inst),
-            "price_dp":     _PRICE_DP.get(inst, _PRICE_DP_DEFAULT),
-            "units_suffix": _UNITS_SUFFIX.get(inst, ""),
-            "direction":    "BUY" if units > 0 else "SELL",
-            "units":        abs(int(units)),
-            "entry":        float(t["price"]),
-            "close":        float(t.get("averageClosePrice", 0)),
-            "pl":           pl,
-            "result":       "WIN" if pl > 0 else "LOSS",
-            "closed":       t.get("closeTime", "")[:16].replace("T", " "),
-            "duration":     duration,
-        })
+            duration = "—"
+            try:
+                from datetime import datetime as _dt
+                open_t  = _dt.fromisoformat(t["openTime"].replace("Z", "+00:00"))
+                close_t = _dt.fromisoformat(t["closeTime"].replace("Z", "+00:00"))
+                secs    = int((close_t - open_t).total_seconds())
+                h, m    = divmod(secs // 60, 60)
+                duration = f"{h}h {m}m" if h > 0 else f"{m}m"
+            except Exception:
+                pass
+
+            inst = t["instrument"]
+            result.append({
+                "instrument":   inst,
+                "display_name": _fmt_instrument(inst),
+                "price_dp":     _PRICE_DP.get(inst, _PRICE_DP_DEFAULT),
+                "units_suffix": _UNITS_SUFFIX.get(inst, ""),
+                "direction":    "BUY" if units > 0 else "SELL",
+                "units":        abs(int(units)),
+                "entry":        float(t["price"]),
+                "close":        float(t.get("averageClosePrice", 0)),
+                "pl":           pl,
+                "result":       "WIN" if pl > 0 else "LOSS",
+                "closed":       t.get("closeTime", "")[:16].replace("T", " "),
+                "duration":     duration,
+            })
+        except (KeyError, ValueError, TypeError):
+            continue
     return result
 
 
@@ -493,9 +506,17 @@ def api_data(request: Request):
 
     bot_control.apply_bot_settings()
 
-    acc    = _account()
-    closed = _closed_trades(50)
-    wins   = sum(1 for t in closed if t["result"] == "WIN")
+    try:
+        acc = _account()
+    except Exception as e:
+        return {"error": f"Account fetch failed: {e}"}
+
+    try:
+        closed = _closed_trades(50)
+    except Exception:
+        closed = []
+
+    wins     = sum(1 for t in closed if t["result"] == "WIN")
     win_rate = f"{wins/len(closed)*100:.0f}%" if closed else "—"
 
     _equity_history.append({
@@ -512,7 +533,7 @@ def api_data(request: Request):
         "trade_count":    len(closed),
         "bot_paused":     ctrl.get("paused", False),
         "pause_reason":   ctrl.get("reason"),
-        "open_trades":    _open_trades(),
+        "open_trades":    _safe_open_trades(),
         "closed_trades":  closed[:20],
         "equity_history": list(_equity_history),
         "chart_data":     _chart_data(closed),
@@ -913,9 +934,9 @@ input:checked~.tgl-slider:before{transform:translateX(16px);background:#fff}
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
         <h2 style="margin-bottom:0">Equity Curve</h2>
         <div class="chart-range">
-          <button class="range-btn" onclick="setEquityRange(60)">10m</button>
-          <button class="range-btn" onclick="setEquityRange(180)">30m</button>
-          <button class="range-btn active" onclick="setEquityRange(0)">All</button>
+          <button class="range-btn" onclick="setEquityRange(60,event)">10m</button>
+          <button class="range-btn" onclick="setEquityRange(180,event)">30m</button>
+          <button class="range-btn active" onclick="setEquityRange(0,event)">All</button>
         </div>
       </div>
       <div class="chart-wrap equity-wrap"><canvas id="equityChart"></canvas></div>
@@ -1004,7 +1025,7 @@ input:checked~.tgl-slider:before{transform:translateX(16px);background:#fff}
     <div class="row-full tcard" style="margin-bottom:16px">
       <div class="tcard-hdr">
         <h2>Per-Pair Performance</h2>
-        <button class="hdr-btn" onclick="loadPairStats()">↻ Refresh</button>
+        <button class="hdr-btn" onclick="loadPairStats(true)">↻ Refresh</button>
       </div>
       <div id="pair-stats-body"><div class="empty">Loading...</div></div>
     </div>
@@ -1183,10 +1204,10 @@ const pairChart = new Chart(document.getElementById('pairChart'), {
   }
 });
 
-function setEquityRange(n) {
+function setEquityRange(n, e) {
   _equityRangePoints = n;
   document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
-  event.target.classList.add('active');
+  e.currentTarget.classList.add('active');
   _applyEquityRange();
 }
 
@@ -1228,8 +1249,13 @@ function toast(msg, color='#3fb950') {
 }
 
 async function post(url) {
-  const r = await fetch(url, { method: 'POST' });
-  return r.json();
+  try {
+    const r = await fetch(url, { method: 'POST' });
+    if (!r.ok) return { error: `HTTP ${r.status}` };
+    return r.json();
+  } catch (e) {
+    return { error: 'Network error' };
+  }
 }
 
 // ── Confirm Modal ─────────────────────────────────────────────────────────────
@@ -1268,8 +1294,9 @@ async function _doTogglePause() {
   const btn = $('pause-btn');
   btn.disabled = true;
   const url = botPaused ? '/api/control/resume' : '/api/control/pause';
-  await post(url);
+  const d = await post(url);
   btn.disabled = false;
+  if (d.error) { toast('Error: ' + d.error, '#f85149'); return; }
   toast(botPaused ? 'Bot resumed' : 'Bot paused', botPaused ? '#3fb950' : '#f85149');
 }
 
@@ -1296,7 +1323,7 @@ function closeTrade(id, btn) {
       btn.textContent = '...';
       const d = await post(`/api/control/close/${id}`);
       if (d.status === 'closed') toast('Trade closed', '#3fb950');
-      else { toast('Error: ' + (d.detail || 'unknown'), '#f85149'); btn.disabled = false; btn.textContent = 'Close'; }
+      else { toast('Error: ' + (d.error || d.detail || 'unknown'), '#f85149'); btn.disabled = false; btn.textContent = 'Close'; }
     }
   });
 }
@@ -1553,9 +1580,9 @@ function updateStats(d) {
 
   // win rate with dynamic colour
   const wrEl  = $('win-rate');
-  const wrPct = parseInt(d.win_rate) || 0;
+  const wrPct = parseInt(d.win_rate);
   wrEl.textContent = d.win_rate;
-  wrEl.className   = 'val ' + (wrPct >= 35 ? 'c-green' : wrPct >= 25 ? 'c-yellow' : 'c-red');
+  wrEl.className   = 'val ' + (isNaN(wrPct) ? 'c-blue' : wrPct >= 35 ? 'c-green' : wrPct >= 25 ? 'c-yellow' : 'c-red');
   if (d.trade_count !== undefined) $('wr-sub').textContent = `${d.trade_count} trades sampled`;
 
   // margin with percentage
@@ -1764,7 +1791,7 @@ function switchTab(name) {
     if (b.textContent.toLowerCase().includes(labelMap[name] || name))
       b.classList.add('active');
   });
-  if (name === 'journal')  { loadJournal(); loadPairStats(); }
+  if (name === 'journal')  { loadJournal(true); loadPairStats(true); }
   if (name === 'settings') loadSettings();
   try { localStorage.setItem('fxbot_tab', name); } catch(e) {}
 }
