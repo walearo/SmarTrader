@@ -52,12 +52,15 @@ def _account() -> dict:
     r = accounts_ep.AccountSummary(accountID=config.OANDA_ACCOUNT_ID)
     _client().request(r)
     a = r.response["account"]
+    nav = float(a["NAV"])
+    margin = float(a["marginUsed"])
     return {
-        "nav":           round(float(a["NAV"]), 2),
+        "nav":           round(nav, 2),
         "balance":       round(float(a["balance"]), 2),
         "unrealized_pl": round(float(a["unrealizedPL"]), 2),
         "realized_pl":   round(float(a["pl"]), 2),
-        "margin_used":   round(float(a["marginUsed"]), 2),
+        "margin_used":   round(margin, 2),
+        "margin_pct":    round(margin / nav * 100, 1) if nav > 0 else 0,
         "open_trades":   int(a["openTradeCount"]),
         "currency":      a["currency"],
     }
@@ -272,9 +275,12 @@ LOGIN_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="color-scheme" content="dark"/>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
 <title>FX Bot — Login</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
+  html{background:#0d1117}
   body{background:#0d1117;display:flex;align-items:center;justify-content:center;min-height:100vh;font-family:'Segoe UI',system-ui,sans-serif}
   .card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:40px 36px;width:100%;max-width:380px}
   h1{color:#e6edf3;font-size:20px;margin-bottom:6px;text-align:center}
@@ -503,6 +509,7 @@ def api_data(request: Request):
         "updated":        datetime.now(timezone.utc).strftime("%H:%M:%S UTC"),
         "account":        acc,
         "win_rate":       win_rate,
+        "trade_count":    len(closed),
         "bot_paused":     ctrl.get("paused", False),
         "pause_reason":   ctrl.get("reason"),
         "open_trades":    _open_trades(),
@@ -513,6 +520,7 @@ def api_data(request: Request):
         "news":           _news(),
         "drawdown":       get_drawdown_status(),
         "alert_settings": bot_control.get_alert_settings(),
+        "bot_settings":   {"MAX_CONCURRENT_TRADES": config.MAX_CONCURRENT_TRADES},
     }
 
 
@@ -553,6 +561,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="color-scheme" content="dark"/>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
 <title>FX Bot Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
@@ -564,18 +574,23 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   --yellow:#d29922;--purple:#bc8cff;--orange:#f0883e;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;min-height:100vh}
+html{color-scheme:dark;background:#0d1117!important;height:100%}
+body{background:#0d1117!important;color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;min-height:100vh;overflow-x:hidden}
 
 /* ── Header ────────────────────────────────────────────────────────────────── */
-header{background:var(--card);border-bottom:1px solid var(--border);padding:12px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;position:sticky;top:0;z-index:100}
+header{background:var(--card);border-bottom:1px solid var(--border);padding:0 20px;height:52px;overflow:hidden;display:flex;align-items:center;justify-content:space-between;gap:12px;position:sticky;top:0;z-index:100;flex-shrink:0}
 .hdr-left{display:flex;align-items:center;gap:12px}
 .hdr-right{display:flex;align-items:center;gap:10px}
-header h1{font-size:17px;font-weight:700;white-space:nowrap}
-.status-badge{padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap}
+header h1{font-size:17px;font-weight:700;white-space:nowrap;line-height:1}
+.status-badge{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;line-height:1;white-space:nowrap}
+.status-badge::before{content:'';display:block;width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
 .badge-active{background:#1a3a1f;color:var(--green);border:1px solid var(--green)}
 .badge-paused{background:#3a1a1a;color:var(--red);border:1px solid var(--red)}
+.badge-connecting{background:#1e2227;color:var(--muted);border:1px solid var(--border)}
 .updated{color:var(--muted);font-size:11px;white-space:nowrap}
-.hdr-btn{padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text);transition:.15s}
+.hdr-btn{padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;line-height:1;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text);transition:.15s}
+@keyframes spin{to{transform:rotate(360deg)}}
+.spinning{display:inline-block;animation:spin .7s linear infinite}
 .hdr-btn:hover{background:#21262d}
 .hdr-btn.danger{border-color:var(--red);color:var(--red)}
 .hdr-btn.danger:hover{background:#3a1a1a}
@@ -585,10 +600,10 @@ header h1{font-size:17px;font-weight:700;white-space:nowrap}
 .hdr-btn.success:hover{background:#1a3a1f}
 
 /* ── Layout ────────────────────────────────────────────────────────────────── */
-.container{max-width:1500px;margin:0 auto;padding:18px 20px}
+.container{max-width:1500px;margin:0 auto;padding:18px 20px;background-color:var(--bg);min-height:calc(100vh - 52px)}
 
 /* ── Stat Cards ────────────────────────────────────────────────────────────── */
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+.stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-bottom:16px}
 .card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px 18px}
 .card .lbl{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
 .card .val{font-size:24px;font-weight:700;line-height:1}
@@ -606,15 +621,16 @@ header h1{font-size:17px;font-weight:700;white-space:nowrap}
 
 /* ── Charts Row ────────────────────────────────────────────────────────────── */
 .charts-row{display:grid;grid-template-columns:1fr minmax(200px,240px) minmax(240px,280px);gap:12px;margin-bottom:16px}
-.chart-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px 18px}
+.chart-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px 18px;overflow:hidden}
 .chart-card h2{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:12px}
-.chart-wrap{position:relative}
+.chart-wrap{position:relative;overflow:hidden}
 .equity-wrap{height:240px}
 .donut-wrap{height:180px;display:flex;align-items:center;justify-content:center}
 .bar-wrap{height:180px}
+canvas{display:block;background-color:#161b22}
 
 /* ── Content Rows ──────────────────────────────────────────────────────────── */
-.row2{display:grid;grid-template-columns:1fr 300px;gap:12px;margin-bottom:16px}
+.row2{display:grid;grid-template-columns:1fr 380px;gap:12px;margin-bottom:16px}
 .row-full{margin-bottom:16px}
 .tcard{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px 18px}
 .tcard-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
@@ -653,14 +669,21 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .no-events{color:var(--muted);font-style:italic;font-size:13px;padding:10px 0}
 #news-list{max-height:280px;overflow-y:auto}
 
+/* ── Chart range toggle ─────────────────────────────────────────────────────── */
+.chart-range{display:flex;gap:4px;margin-bottom:8px;justify-content:flex-end}
+.range-btn{padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--muted);transition:.15s}
+.range-btn:hover{color:var(--text)}
+.range-btn.active{background:#1c2a3a;border-color:var(--blue);color:var(--blue)}
+
 /* ── Log Filters ────────────────────────────────────────────────────────────── */
-.log-filters{display:flex;gap:6px}
+.log-filters{display:flex;gap:6px;align-items:center}
 .log-filter-btn{padding:3px 10px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--muted);transition:.15s}
 .log-filter-btn:hover{background:#21262d;color:var(--text)}
 .log-filter-btn.active{background:#1c2a3a;border-color:var(--blue);color:var(--blue)}
+.err-badge{display:none;background:var(--red);color:#fff;border-radius:10px;font-size:9px;font-weight:700;padding:1px 5px;margin-left:3px;vertical-align:middle}
 
 /* ── Bot Log ────────────────────────────────────────────────────────────────── */
-.log-wrap{max-height:280px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#30363d #161b22}
+.log-wrap{max-height:420px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#30363d #161b22}
 .log-wrap::-webkit-scrollbar{width:6px}
 .log-wrap::-webkit-scrollbar-track{background:#161b22;border-radius:3px}
 .log-wrap::-webkit-scrollbar-thumb{background:#30363d;border-radius:3px}
@@ -706,7 +729,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .ps-summary{display:flex;gap:24px;flex-wrap:wrap;padding:10px 0 14px;border-bottom:1px solid #21262d;margin-bottom:12px}
 .ps-summary-item{display:flex;flex-direction:column;align-items:center}
 .ps-summary-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
-.ps-summary-value{font-size:18px;font-weight:700;color:var(--fg)}
+.ps-summary-value{font-size:18px;font-weight:700;color:var(--text)}
 .ps-table{width:100%;border-collapse:collapse;font-size:13px}
 .ps-table th{text-align:left;padding:6px 10px;color:var(--muted);font-weight:600;font-size:11px;border-bottom:1px solid #21262d}
 .ps-table td{padding:6px 10px;border-bottom:1px solid #161b22}
@@ -784,14 +807,17 @@ input:checked~.tgl-slider:before{transform:translateX(16px);background:#fff}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
 
 /* ── Mobile ─────────────────────────────────────────────────────────────────── */
+@media(max-width:1100px){
+  .stats{grid-template-columns:repeat(3,1fr)}
+}
 @media(max-width:900px){
-  .stats{grid-template-columns:repeat(2,1fr)}
+  .stats{grid-template-columns:repeat(3,1fr)}
   .drawdown-row{grid-template-columns:1fr}
   .charts-row{grid-template-columns:1fr 1fr;grid-template-rows:auto auto}
   .charts-row .chart-card:first-child{grid-column:1/-1}
   .row2{grid-template-columns:1fr}
   .journal-grid{grid-template-columns:1fr}
-  header h1{font-size:15px}
+  header h1{font-size:15px;line-height:1}
   .updated{display:none}
   .col-hide-mobile{display:none}
 }
@@ -813,7 +839,7 @@ input:checked~.tgl-slider:before{transform:translateX(16px);background:#fff}
 <header>
   <div class="hdr-left">
     <h1>⚡ FX Bot</h1>
-    <span class="status-badge badge-paused" id="status-badge">● CONNECTING</span>
+    <span class="status-badge badge-connecting" id="status-badge">CONNECTING</span>
   </div>
   <div class="hdr-right">
     <span class="updated" id="updated-time">Connecting...</span>
@@ -847,14 +873,19 @@ input:checked~.tgl-slider:before{transform:translateX(16px);background:#fff}
       <div class="sub" id="realized-sub">Realized: —</div>
     </div>
     <div class="card">
-      <div class="lbl">Win Rate (last 50)</div>
+      <div class="lbl">Open Trades</div>
+      <div class="val c-blue" id="open-count">—</div>
+      <div class="sub" id="open-count-sub">— / — max</div>
+    </div>
+    <div class="card">
+      <div class="lbl">Win Rate</div>
       <div class="val c-green" id="win-rate">—</div>
-      <div class="sub">from last 50 closed trades</div>
+      <div class="sub" id="wr-sub">— trades sampled</div>
     </div>
     <div class="card">
       <div class="lbl">Margin Used</div>
       <div class="val c-yellow" id="margin">—</div>
-      <div class="sub" id="currency-sub">—</div>
+      <div class="sub" id="margin-sub">— of NAV · <span id="currency-sub">—</span></div>
     </div>
   </div>
 
@@ -879,7 +910,14 @@ input:checked~.tgl-slider:before{transform:translateX(16px);background:#fff}
   <!-- CHARTS ROW -->
   <div class="charts-row">
     <div class="chart-card">
-      <h2>Equity Curve</h2>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <h2 style="margin-bottom:0">Equity Curve</h2>
+        <div class="chart-range">
+          <button class="range-btn" onclick="setEquityRange(60)">10m</button>
+          <button class="range-btn" onclick="setEquityRange(180)">30m</button>
+          <button class="range-btn active" onclick="setEquityRange(0)">All</button>
+        </div>
+      </div>
       <div class="chart-wrap equity-wrap"><canvas id="equityChart"></canvas></div>
     </div>
     <div class="chart-card">
@@ -931,7 +969,7 @@ input:checked~.tgl-slider:before{transform:translateX(16px);background:#fff}
         <button class="log-filter-btn active" data-filter="all"     onclick="setLogFilter('all')">All</button>
         <button class="log-filter-btn"        data-filter="trades"  onclick="setLogFilter('trades')">Trades</button>
         <button class="log-filter-btn"        data-filter="blocked" onclick="setLogFilter('blocked')">Blocked</button>
-        <button class="log-filter-btn"        data-filter="errors"  onclick="setLogFilter('errors')">Errors</button>
+        <button class="log-filter-btn"        data-filter="errors"  id="err-filter-btn" onclick="setLogFilter('errors')">Errors<span class="err-badge" id="err-badge"></span></button>
       </div>
     </div>
     <div class="log-wrap" id="bot-log"><div class="no-events">Waiting for bot events...</div></div>
@@ -990,6 +1028,10 @@ input:checked~.tgl-slider:before{transform:translateX(16px);background:#fff}
       <div class="settings-sections" id="settings-form">
         <div class="empty">Loading...</div>
       </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px;padding-top:14px;border-top:1px solid var(--border)">
+        <button class="hdr-btn" onclick="resetSettings()">Reset Defaults</button>
+        <button class="hdr-btn primary" onclick="saveSettings()">Save Changes</button>
+      </div>
     </div>
 
     <!-- Telegram Alerts -->
@@ -1026,6 +1068,19 @@ let _logFilter     = 'all';
 let _lastLog       = [];
 let _staleTimer    = null;
 
+// ── Dark canvas background plugin (prevents GPU compositing white-flash) ──────
+const darkCanvasPlugin = {
+  id: 'darkCanvas',
+  beforeDraw(chart) {
+    const {ctx, width, height} = chart;
+    ctx.save();
+    ctx.fillStyle = '#161b22';
+    ctx.fillRect(0, 0, width, height);
+    ctx.restore();
+  }
+};
+Chart.register(darkCanvasPlugin);
+
 // ── Donut center-label plugin ─────────────────────────────────────────────────
 const centerTextPlugin = {
   id: 'centerText',
@@ -1051,6 +1106,19 @@ const centerTextPlugin = {
 Chart.register(centerTextPlugin);
 
 // ── Chart.js setup ────────────────────────────────────────────────────────────
+const _tooltipDefaults = {
+  backgroundColor: '#1e2430',
+  titleColor: '#e6edf3',
+  bodyColor: '#8b949e',
+  borderColor: '#30363d',
+  borderWidth: 1,
+  padding: 8,
+  cornerRadius: 6,
+};
+
+let _equityRangePoints = 0; // 0 = show all
+let _equityHistoryFull = [];
+
 const equityChart = new Chart(document.getElementById('equityChart'), {
   type: 'line',
   data: {
@@ -1062,7 +1130,10 @@ const equityChart = new Chart(document.getElementById('equityChart'), {
   },
   options: {
     responsive: true, maintainAspectRatio: false,
-    plugins: { legend: { display: false } },
+    plugins: {
+      legend: { display: false },
+      tooltip: { ..._tooltipDefaults, callbacks: { label: ctx => ' ' + ctx.parsed.y.toFixed(2) } },
+    },
     scales: {
       x: { ticks: { color: '#8b949e', maxTicksLimit: 6 }, grid: { color: '#21262d' } },
       y: { ticks: { color: '#8b949e' }, grid: { color: '#21262d' } },
@@ -1084,7 +1155,8 @@ const winlossChart = new Chart(document.getElementById('winlossChart'), {
     responsive: true, maintainAspectRatio: false,
     cutout: '65%',
     plugins: {
-      legend: { position: 'bottom', labels: { color: '#8b949e', font: { size: 11 }, padding: 10 } }
+      legend: { position: 'bottom', labels: { color: '#8b949e', font: { size: 11 }, padding: 10 } },
+      tooltip: _tooltipDefaults,
     }
   }
 });
@@ -1100,13 +1172,31 @@ const pairChart = new Chart(document.getElementById('pairChart'), {
   options: {
     responsive: true, maintainAspectRatio: false,
     indexAxis: 'y',
-    plugins: { legend: { display: false } },
+    plugins: {
+      legend: { display: false },
+      tooltip: { ..._tooltipDefaults, callbacks: { label: ctx => ' ' + ctx.parsed.x.toFixed(1) + ' pips' } },
+    },
     scales: {
       x: { ticks: { color: '#8b949e', font: { size: 11 } }, grid: { color: '#21262d' } },
       y: { ticks: { color: '#8b949e', font: { size: 11 } }, grid: { display: false } },
     }
   }
 });
+
+function setEquityRange(n) {
+  _equityRangePoints = n;
+  document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  _applyEquityRange();
+}
+
+function _applyEquityRange() {
+  const src = _equityHistoryFull;
+  const slice = _equityRangePoints > 0 ? src.slice(-_equityRangePoints) : src;
+  equityChart.data.labels = slice.map(h => h.time);
+  equityChart.data.datasets[0].data = slice.map(h => h.nav);
+  equityChart.update('none');
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
@@ -1455,14 +1545,22 @@ function updateStats(d) {
   $('balance-sub').textContent = `Balance: ${fmtCcy(a.currency, a.balance)}`;
   $('unrealized').innerHTML    = fmtPL(a.unrealized_pl);
   $('realized-sub').innerHTML  = `Realized: ${fmtPL(a.realized_pl)}`;
-  $('margin').textContent      = fmtCcy(a.currency, a.margin_used);
-  $('currency-sub').textContent = a.currency + ' account';
 
-  // win rate with dynamic colour (fix 11)
+  // open trades card
+  const maxTrades = (d.bot_settings && d.bot_settings.MAX_CONCURRENT_TRADES) || '—';
+  $('open-count').textContent     = a.open_trades;
+  $('open-count-sub').textContent = `${a.open_trades} / ${maxTrades} max`;
+
+  // win rate with dynamic colour
   const wrEl  = $('win-rate');
   const wrPct = parseInt(d.win_rate) || 0;
   wrEl.textContent = d.win_rate;
   wrEl.className   = 'val ' + (wrPct >= 35 ? 'c-green' : wrPct >= 25 ? 'c-yellow' : 'c-red');
+  if (d.trade_count !== undefined) $('wr-sub').textContent = `${d.trade_count} trades sampled`;
+
+  // margin with percentage
+  $('margin').textContent      = fmtCcy(a.currency, a.margin_used);
+  $('margin-sub').innerHTML    = `${a.margin_pct ?? '—'}% of NAV · <span id="currency-sub">${a.currency}</span>`;
 
   // updated time + stale detection (fix 10)
   $('updated-time').textContent  = 'Updated ' + toLocal(d.updated);
@@ -1483,12 +1581,12 @@ function updateStats(d) {
   const badge = $('status-badge');
   const btn   = $('pause-btn');
   if (botPaused) {
-    badge.textContent = '● PAUSED';
+    badge.textContent = 'PAUSED';
     badge.className   = 'status-badge badge-paused';
     btn.textContent   = '▶ Resume Bot';
     btn.className     = 'hdr-btn success';
   } else {
-    badge.textContent = '● ACTIVE';
+    badge.textContent = 'ACTIVE';
     badge.className   = 'status-badge badge-active';
     btn.textContent   = '⏸ Pause Bot';
     btn.className     = 'hdr-btn primary';
@@ -1512,10 +1610,9 @@ function updateStats(d) {
 }
 
 function updateCharts(history, chartData) {
-  // equity curve
-  equityChart.data.labels = history.map(h => h.time);
-  equityChart.data.datasets[0].data = history.map(h => h.nav);
-  equityChart.update('none');
+  // equity curve (range-aware)
+  _equityHistoryFull = history;
+  _applyEquityRange();
 
   // win/loss donut
   winlossChart.data.datasets[0].data = chartData.win_loss;
@@ -1648,6 +1745,13 @@ function renderLog(log) {
 
 function updateLog(log) {
   renderLog(log);
+  // error badge
+  const errCount = (log || []).filter(e => e.type === 'error').length;
+  const badge = $('err-badge');
+  if (badge) {
+    badge.textContent = errCount;
+    badge.style.display = errCount > 0 ? 'inline' : 'none';
+  }
 }
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -1662,7 +1766,16 @@ function switchTab(name) {
   });
   if (name === 'journal')  { loadJournal(); loadPairStats(); }
   if (name === 'settings') loadSettings();
+  try { localStorage.setItem('fxbot_tab', name); } catch(e) {}
 }
+
+// ── Restore last tab on load ───────────────────────────────────────────────────
+(function() {
+  try {
+    const saved = localStorage.getItem('fxbot_tab');
+    if (saved && saved !== 'main') switchTab(saved);
+  } catch(e) {}
+})();
 
 // ── Journal ───────────────────────────────────────────────────────────────────
 let _journalLoaded = false;
@@ -1758,7 +1871,7 @@ function connect() {
     if (d.unauthorized) { window.location.href = '/login'; return; }
     if (d.error) {
       console.error(d.error);
-      $('status-badge').textContent = '● ERROR';
+      $('status-badge').textContent = 'ERROR';
       $('status-badge').className   = 'status-badge badge-paused';
       return;
     }
@@ -1771,7 +1884,7 @@ function connect() {
   };
 
   es.onerror = () => {
-    $('status-badge').textContent = '● DISCONNECTED';
+    $('status-badge').textContent = 'DISCONNECTED';
     $('status-badge').className   = 'status-badge badge-paused';
     es.close();
     setTimeout(connect, 5000);
@@ -1782,7 +1895,7 @@ connect();
 
 function refreshNow() {
   const btn = $('refresh-btn');
-  if (btn) { btn.disabled = true; btn.textContent = '⟳'; }
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinning">⟳</span>'; }
   fetch('/api/data').then(r => r.json()).then(d => {
     if (d.unauthorized) { window.location.href = '/login'; return; }
     if (d.error) { toast('Refresh error: ' + d.error, '#f85149'); return; }
@@ -1794,7 +1907,7 @@ function refreshNow() {
     updateLog(d.bot_log);
     _journalLoaded = false;
   }).catch(err => toast('Refresh failed', '#f85149')).finally(() => {
-    if (btn) { btn.disabled = false; btn.textContent = '↻'; }
+    if (btn) { btn.disabled = false; btn.textContent = '↻'; }   // restore plain icon
   });
 }
 </script>
@@ -1806,10 +1919,24 @@ function refreshNow() {
 def index(request: Request):
     if not authenticated(request):
         return RedirectResponse("/login", status_code=302)
-    return DASHBOARD_HTML
+    return HTMLResponse(DASHBOARD_HTML, headers={"Cache-Control": "no-store"})
 
 
 # ─── ENTRY ────────────────────────────────────────────────────────────────────
+
+@app.get("/favicon.ico", include_in_schema=False)
+@app.get("/favicon.svg", include_in_schema=False)
+async def favicon():
+    from starlette.responses import Response
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+        '<rect width="32" height="32" rx="6" fill="#0f0f1a"/>'
+        '<text x="16" y="24" font-size="22" text-anchor="middle" '
+        'font-family="sans-serif">&#x26A1;</text>'
+        "</svg>"
+    )
+    return Response(content=svg.encode(), media_type="image/svg+xml")
+
 
 @app.get("/health")
 async def health():
