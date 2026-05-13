@@ -106,8 +106,8 @@ def upcoming_events(hours: int = 4) -> list[dict]:
         event_time = _parse_event_time(event)
         if event_time and now <= event_time <= cutoff:
             results.append({
-                "currency": event.get("currency"),
-                "title":    event.get("title"),
+                "currency": event.get("currency") or "",
+                "title":    event.get("title") or "",
                 "time":     event_time.strftime("%H:%M UTC"),
             })
 

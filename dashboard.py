@@ -1710,7 +1710,7 @@ function updateNews(news) {
   el.innerHTML = news.map(n => `
     <div class="news-item">
       <div class="news-row1">
-        <span class="news-cur">${n.currency}</span>
+        ${n.currency ? `<span class="news-cur">${n.currency}</span>` : ''}
         <span class="news-impact">HIGH</span>
         <span class="news-time">${n.time}</span>
       </div>
