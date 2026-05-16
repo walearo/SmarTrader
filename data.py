@@ -53,7 +53,15 @@ def get_prices(pairs: list) -> dict:
     client = _client()
     params = {"instruments": ",".join(pairs)}
     r = pricing.PricingInfo(accountID=config.OANDA_ACCOUNT_ID, params=params)
-    client.request(r)
+    try:
+        client.request(r)
+    except oandapyV20.exceptions.V20Error as e:
+        msg = str(e)
+        if "Insufficient authorization" in msg or "401" in msg:
+            raise PermissionError(
+                f"OANDA API key rejected (expired or wrong environment?): {msg}"
+            ) from e
+        raise
     return {
         p["instrument"]: _parse_price(p)
         for p in r.response.get("prices", [])

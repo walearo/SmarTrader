@@ -7,7 +7,7 @@ Strategy/risk constants below are safe to commit — they contain no secrets.
 import os
 from dotenv import load_dotenv
 
-load_dotenv()   # loads .env from the project directory if present
+load_dotenv(override=True)   # always prefer .env values over pre-existing shell env vars
 
 
 # ─── OANDA ────────────────────────────────────────────────────────────────────

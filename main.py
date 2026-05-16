@@ -82,6 +82,11 @@ def validate_config() -> None:
         )
 
     # ── OANDA environment check ─────────────────────────────────────────────────
+    key_hint = ("…" + config.OANDA_API_KEY[-6:]) if len(config.OANDA_API_KEY) >= 6 else "(empty)"
+    log.info(
+        f"OANDA config — env={config.OANDA_ENVIRONMENT}  "
+        f"account={config.OANDA_ACCOUNT_ID}  key=…{key_hint}"
+    )
     if config.OANDA_ENVIRONMENT == "live":
         log.warning(
             "OANDA_ENVIRONMENT=live — bot is connected to a LIVE funded account. "
